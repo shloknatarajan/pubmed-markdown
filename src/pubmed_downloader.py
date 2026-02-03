@@ -21,6 +21,34 @@ class PubMedDownloader:
         self.html_to_markdown = PubMedHTMLToMarkdownConverter()
         self.save_dir = save_dir
 
+    def single_pmcid_to_markdown(self, pmcid: str) -> Optional[str]:
+        """
+        Convert a single PMCID directly to markdown, skipping PMID resolution.
+
+        Args:
+            pmcid (str): The PMCID to convert (e.g. "PMC1234567")
+
+        Returns:
+            Optional[str]: The markdown content if successful, None if any step fails
+        """
+        html = get_html_from_pmcid(pmcid)
+        if html is None:
+            return None
+
+        try:
+            markdown = self.html_to_markdown.convert_html(html)
+        except Exception as e:
+            logger.error(
+                f"Error converting HTML to markdown for PMCID {pmcid}: {str(e)}"
+            )
+            return None
+
+        supplement = format_supplement_as_markdown(pmcid)
+        if supplement:
+            markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
+
+        return markdown
+
     def single_pmid_to_markdown(self, pmid: str) -> Optional[str]:
         """
         Convert a single PMID to markdown.
