@@ -13,6 +13,7 @@ clean-pharmgkb = "rm -rf data/variantAnnotations data/pharmgkb_pmids.txt"
 copy-markdown = "python -m src.copy_markdown"
 black = "python -m black ."
 clear-caches = "python -m src.pubmed_downloader --clear_caches"
+add-supplements = "python -m src.pubmed_downloader --add_supplements"
 
 [dependencies]
 python-dotenv = ">=1.1.0,<2"
