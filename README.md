@@ -1,4 +1,4 @@
-# PubMed PMID to Markdown Converter
+# PubMed PMCID/PMID to Markdown Converter
 
 A comprehensive tool for converting PubMed articles from article PMIDs to clean, structured markdown format. This project automatically handles the entire pipeline from PMID to full-text markdown, including PMCID resolution, HTML extraction, and intelligent content conversion.
 
