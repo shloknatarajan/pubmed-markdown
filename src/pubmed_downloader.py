@@ -1,6 +1,7 @@
 from .pmcid_from_pmid import get_pmcid_from_pmid
 from .html_from_pmcid import get_html_from_pmcid
 from .markdown_from_html import PubMedHTMLToMarkdownConverter
+from .utils_bioc import format_supplement_as_markdown, prefetch_bioc_supplements
 from typing import List, Optional
 import os
 from loguru import logger
@@ -19,6 +20,34 @@ class PubMedDownloader:
     def __init__(self, save_dir: str = "data"):
         self.html_to_markdown = PubMedHTMLToMarkdownConverter()
         self.save_dir = save_dir
+
+    def single_pmcid_to_markdown(self, pmcid: str) -> Optional[str]:
+        """
+        Convert a single PMCID directly to markdown, skipping PMID resolution.
+
+        Args:
+            pmcid (str): The PMCID to convert (e.g. "PMC1234567")
+
+        Returns:
+            Optional[str]: The markdown content if successful, None if any step fails
+        """
+        html = get_html_from_pmcid(pmcid)
+        if html is None:
+            return None
+
+        try:
+            markdown = self.html_to_markdown.convert_html(html)
+        except Exception as e:
+            logger.error(
+                f"Error converting HTML to markdown for PMCID {pmcid}: {str(e)}"
+            )
+            return None
+
+        supplement = format_supplement_as_markdown(pmcid)
+        if supplement:
+            markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
+
+        return markdown
 
     def single_pmid_to_markdown(self, pmid: str) -> Optional[str]:
         """
@@ -45,10 +74,16 @@ class PubMedDownloader:
         # Convert to markdown
         try:
             markdown = self.html_to_markdown.convert_html(html)
-            return markdown
         except Exception as e:
             logger.error(f"Error converting HTML to markdown for PMID {pmid}: {str(e)}")
             return None
+
+        # Append supplementary materials
+        supplement = format_supplement_as_markdown(pmcid)
+        if supplement:
+            markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
+
+        return markdown
 
     def check_existing_html_pmcids(self, save_dir: str = "data/") -> List[str]:
         """
@@ -127,14 +162,19 @@ class PubMedDownloader:
             html_paths, desc=f"Converting html ({save_dir}/html) to markdown"
         ):
             markdown = self.html_to_markdown.convert_file(html_path)
-            with open(
-                os.path.join(
-                    save_dir,
-                    "markdown",
-                    f"{html_path.split('/')[-1].replace('.html', '.md')}",
-                ),
-                "w",
-            ) as f:
+
+            # Append supplementary materials
+            pmcid = os.path.basename(html_path).replace(".html", "")
+            supplement = format_supplement_as_markdown(pmcid)
+            if supplement:
+                markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
+
+            md_path = os.path.join(
+                save_dir,
+                "markdown",
+                f"{os.path.basename(html_path).replace('.html', '.md')}",
+            )
+            with open(md_path, "w") as f:
                 f.write(markdown)
 
     def pmids_to_pmcids(self, pmids: List[str], save_dir: str = "data") -> List[str]:
@@ -233,6 +273,67 @@ class PubMedDownloader:
         self.pmcids_to_html(pmcids, save_dir)
         self.local_html_to_markdown(save_dir, overwrite=overwrite)
 
+    def add_supplements_to_existing(
+        self, save_dir: str = "data", overwrite: bool = False
+    ) -> None:
+        """
+        Scan existing markdown files and append supplementary materials.
+
+        Args:
+            save_dir: Directory containing the markdown/ subdirectory
+            overwrite: If True, re-fetch and replace existing supplement sections
+        """
+        markdown_dir = os.path.join(save_dir, "markdown")
+        if not os.path.exists(markdown_dir):
+            logger.warning(f"No markdown directory found at {markdown_dir}")
+            return
+
+        md_files = [f for f in os.listdir(markdown_dir) if f.endswith(".md")]
+        if not md_files:
+            logger.info("No markdown files found")
+            return
+
+        # Extract PMCIDs from filenames
+        pmcids = [f.replace(".md", "") for f in md_files]
+
+        # Prefetch supplements in batch
+        logger.info(f"Prefetching supplements for {len(pmcids)} articles")
+        prefetch_bioc_supplements(pmcids)
+
+        added = 0
+        skipped = 0
+        for md_file in tqdm(md_files, desc="Adding supplements"):
+            md_path = os.path.join(markdown_dir, md_file)
+            pmcid = md_file.replace(".md", "")
+
+            with open(md_path, "r") as f:
+                content = f.read()
+
+            has_supplements = "## Supplementary Materials" in content
+
+            if has_supplements and not overwrite:
+                skipped += 1
+                continue
+
+            supplement = format_supplement_as_markdown(pmcid)
+            if not supplement:
+                continue
+
+            if has_supplements and overwrite:
+                # Remove old supplement section (everything from ## Supplementary Materials onward)
+                idx = content.index("## Supplementary Materials")
+                content = content[:idx].rstrip()
+
+            content = content.rstrip() + "\n\n" + supplement + "\n"
+
+            with open(md_path, "w") as f:
+                f.write(content)
+            added += 1
+
+        logger.info(
+            f"Supplements added: {added}, skipped (already present): {skipped}"
+        )
+
 
 def clear_all_caches() -> None:
     """
@@ -326,11 +427,19 @@ if __name__ == "__main__":
         action="store_true",
         help="Clear all caches (PMID->PMCID cache) and exit",
     )
+    parser.add_argument(
+        "--add_supplements",
+        action="store_true",
+        help="Add supplementary materials to existing markdown files",
+    )
     args = parser.parse_args()
 
     if args.clear_caches:
         clear_all_caches()
+    elif args.add_supplements:
+        downloader = PubMedDownloader()
+        downloader.add_supplements_to_existing(args.save_dir, args.overwrite)
     elif args.file_path:
         convert_pmids_from_file(args.file_path, args.save_dir, args.overwrite)
     else:
-        parser.error("--file_path is required (or use --clear_caches)")
+        parser.error("--file_path is required (or use --clear_caches / --add_supplements)")
