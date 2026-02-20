@@ -2,6 +2,7 @@ from .pmcid_from_pmid import get_pmcid_from_pmid
 from .html_from_pmcid import get_html_from_pmcid
 from .markdown_from_html import PubMedHTMLToMarkdownConverter
 from .utils_bioc import format_supplement_as_markdown, prefetch_bioc_supplements
+from .abstract_from_pmid import get_abstract_markdown_from_pmid
 from typing import List, Optional
 import os
 from loguru import logger
@@ -9,6 +10,8 @@ from tqdm import tqdm
 import argparse
 from pathlib import Path
 import shutil
+import re
+import time
 
 
 class PubMedDownloader:
@@ -46,12 +49,14 @@ class PubMedDownloader:
         supplement = format_supplement_as_markdown(pmcid)
         if supplement:
             markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
+        else:
+            markdown = markdown.rstrip() + "\n\n## Supplementary Materials\n\nNo supplementary materials found.\n"
 
         return markdown
 
     def single_pmid_to_markdown(self, pmid: str) -> Optional[str]:
         """
-        Convert a single PMID to markdown.
+        Convert a single PMID to markdown. Falls back to abstract-only if no PMCID.
 
         Args:
             pmid (str): The PMID to convert
@@ -64,7 +69,11 @@ class PubMedDownloader:
         pmcid = pmcid_mapping.get(str(pmid))
 
         if pmcid is None:
-            return None
+            logger.warning(
+                f"PMID {pmid} is not available on PubMed Central (Open Access). "
+                f"Downloading abstract only."
+            )
+            return get_abstract_markdown_from_pmid(pmid)
 
         # Get HTML
         html = get_html_from_pmcid(pmcid)
@@ -82,6 +91,8 @@ class PubMedDownloader:
         supplement = format_supplement_as_markdown(pmcid)
         if supplement:
             markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
+        else:
+            markdown = markdown.rstrip() + "\n\n## Supplementary Materials\n\nNo supplementary materials found.\n"
 
         return markdown
 
@@ -168,6 +179,8 @@ class PubMedDownloader:
             supplement = format_supplement_as_markdown(pmcid)
             if supplement:
                 markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
+            else:
+                markdown = markdown.rstrip() + "\n\n## Supplementary Materials\n\nNo supplementary materials found.\n"
 
             md_path = os.path.join(
                 save_dir,
@@ -258,20 +271,70 @@ class PubMedDownloader:
             save_dir (str): Directory to save the files to (default: "data/")
             overwrite (bool): Whether to overwrite existing files (default: False)
         """
-        pmcids = self.pmids_to_pmcids(pmids, save_dir)
-        # save found pmcids
+        # Normalize PMIDs
+        pmids = [str(p).strip() for p in pmids]
+
+        # Get PMCID mapping for all PMIDs
+        pmcid_mapping = get_pmcid_from_pmid(pmids, save_dir=save_dir)
+
+        # Split into PMIDs with and without PMCIDs
+        pmids_with_pmcid = []
+        pmids_without_pmcid = []
+        for pmid in pmids:
+            pmcid = pmcid_mapping.get(pmid)
+            if pmcid:
+                pmids_with_pmcid.append((pmid, pmcid))
+            else:
+                pmids_without_pmcid.append(pmid)
+
+        valid_pmcids = [pmcid for _, pmcid in pmids_with_pmcid]
+
+        # Save found pmcids
         with open(os.path.join(save_dir, "pmcids.txt"), "w") as f:
-            f.write("\n".join(pmcids))
+            f.write("\n".join(valid_pmcids))
+
         if not overwrite:
-            # Get existing markdown files
             existing_markdown = self.check_existing_markdown_pmcids(save_dir)
             logger.info(f"Found {len(existing_markdown)} existing markdown files")
-            # Filter out PMCIDs that already have markdown
-            pmcids = [pmcid for pmcid in pmcids if pmcid not in existing_markdown]
-        logger.info(f"Converting {len(pmcids)} PMCIDs to Markdown")
+            valid_pmcids = [pmcid for pmcid in valid_pmcids if pmcid not in existing_markdown]
+            pmids_without_pmcid = [
+                pmid for pmid in pmids_without_pmcid
+                if f"PMID{pmid}" not in existing_markdown
+            ]
 
-        self.pmcids_to_html(pmcids, save_dir)
+        # Full-text path: PMCIDs -> HTML -> Markdown
+        logger.info(f"Converting {len(valid_pmcids)} PMCIDs to Markdown (full text)")
+        self.pmcids_to_html(valid_pmcids, save_dir)
         self.local_html_to_markdown(save_dir, overwrite=overwrite)
+
+        # Abstract fallback for PMIDs without PMCIDs
+        if pmids_without_pmcid:
+            logger.info(
+                f"{len(pmids_without_pmcid)} PMIDs have no PMCID (not open access). "
+                f"Fetching abstracts only."
+            )
+            markdown_dir = os.path.join(save_dir, "markdown")
+            os.makedirs(markdown_dir, exist_ok=True)
+
+            for pmid in tqdm(pmids_without_pmcid, desc="Fetching abstracts for non-OA articles"):
+                logger.warning(
+                    f"PMID {pmid} is not available on PubMed Central (Open Access). "
+                    f"Downloading abstract only."
+                )
+                markdown = get_abstract_markdown_from_pmid(pmid)
+                if markdown is None:
+                    logger.error(f"Failed to fetch abstract for PMID {pmid}")
+                    time.sleep(0.5)
+                    continue
+
+                markdown = markdown.rstrip() + "\n\n## Supplementary Materials\n\nNo supplementary materials found.\n"
+
+                md_path = os.path.join(markdown_dir, f"PMID{pmid}.md")
+                with open(md_path, "w") as f:
+                    f.write(markdown)
+
+                # Respect NCBI rate limit (~3 requests/sec without API key)
+                time.sleep(0.4)
 
     def add_supplements_to_existing(
         self, save_dir: str = "data", overwrite: bool = False
@@ -311,7 +374,13 @@ class PubMedDownloader:
 
             has_supplements = "## Supplementary Materials" in content
 
-            if has_supplements and not overwrite:
+            # Some articles contain an HTML-derived "Supplementary Materials" section
+            # that is not the BioC supplement text we add (often just a link/stub).
+            # Only skip when BioC-style content is already present (e.g., headings
+            # that look like supplementary PDF filenames).
+            has_bioc_supplements = bool(re.search(r"^###\s+.*\.pdf\s*$", content, re.MULTILINE))
+
+            if has_supplements and has_bioc_supplements and not overwrite:
                 skipped += 1
                 continue
 
