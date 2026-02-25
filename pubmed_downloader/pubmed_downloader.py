@@ -21,12 +21,13 @@ class PubMedDownloader:
         self.html_to_markdown = PubMedHTMLToMarkdownConverter()
         self.save_dir = save_dir
 
-    def single_pmcid_to_markdown(self, pmcid: str) -> Optional[str]:
+    def single_pmcid_to_markdown(self, pmcid: str, include_supplements: bool = True) -> Optional[str]:
         """
         Convert a single PMCID directly to markdown, skipping PMID resolution.
 
         Args:
             pmcid (str): The PMCID to convert (e.g. "PMC1234567")
+            include_supplements (bool): Whether to append supplementary materials (default: True)
 
         Returns:
             Optional[str]: The markdown content if successful, None if any step fails
@@ -43,18 +44,20 @@ class PubMedDownloader:
             )
             return None
 
-        supplement = format_supplement_as_markdown(pmcid)
-        if supplement:
-            markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
+        if include_supplements:
+            supplement = format_supplement_as_markdown(pmcid)
+            if supplement:
+                markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
 
         return markdown
 
-    def single_pmid_to_markdown(self, pmid: str) -> Optional[str]:
+    def single_pmid_to_markdown(self, pmid: str, include_supplements: bool = True) -> Optional[str]:
         """
         Convert a single PMID to markdown.
 
         Args:
             pmid (str): The PMID to convert
+            include_supplements (bool): Whether to append supplementary materials (default: True)
 
         Returns:
             Optional[str]: The markdown content if successful, None if any step fails
@@ -79,9 +82,10 @@ class PubMedDownloader:
             return None
 
         # Append supplementary materials
-        supplement = format_supplement_as_markdown(pmcid)
-        if supplement:
-            markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
+        if include_supplements:
+            supplement = format_supplement_as_markdown(pmcid)
+            if supplement:
+                markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
 
         return markdown
 
