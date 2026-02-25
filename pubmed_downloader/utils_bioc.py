@@ -269,7 +269,8 @@ def prefetch_bioc_supplements(pmcids: list[str], delay: float = 0.2) -> dict[str
         results[pmcid] = text is not None
 
         if (i + 1) % 10 == 0:
-            logger.info(f"Prefetched {i + 1}/{len(pmcids)} supplements")
+            hits = sum(1 for v in results.values() if v)
+            logger.info(f"Prefetched {i + 1}/{len(pmcids)} | Found: {hits} ({100*hits/(i+1):.1f}%)")
 
         time.sleep(delay)
 
