@@ -2,6 +2,7 @@ from .pmcid_from_pmid import get_pmcid_from_pmid
 from .html_from_pmcid import get_html_from_pmcid
 from .markdown_from_html import PubMedHTMLToMarkdownConverter
 from .utils_bioc import format_supplement_as_markdown, prefetch_bioc_supplements
+from .abstract_from_pmid import get_abstract_markdown_from_pmid
 from typing import List, Optional
 import os
 from loguru import logger
@@ -67,7 +68,11 @@ class PubMedDownloader:
         pmcid = pmcid_mapping.get(str(pmid))
 
         if pmcid is None:
-            return None
+            logger.warning(
+                f"PMID {pmid} is not available on PubMed Central (Open Access). "
+                f"Downloading abstract only."
+            )
+            return get_abstract_markdown_from_pmid(pmid)
 
         # Get HTML
         html = get_html_from_pmcid(pmcid)
