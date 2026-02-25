@@ -18,7 +18,7 @@ from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from src.pubmed_downloader import PubMedDownloader
+from pubmed_downloader import PubMedDownloader
 
 # ---------------------------------------------------------------------------
 # Rate limiting
@@ -133,20 +133,16 @@ _converter = PubMedDownloader()
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-async def _convert_pmid(
-    pmid: str, include_supplements: bool = True
-) -> ConvertResult:
+async def _convert_pmid(pmid: str, include_supplements: bool = True) -> ConvertResult:
     """Run the PMID→markdown pipeline in a thread (it does blocking I/O)."""
-    from src.pmcid_from_pmid import get_pmcid_from_pmid
-    from src.html_from_pmcid import get_html_from_pmcid
-    from src.utils_bioc import format_supplement_as_markdown
+    from pubmed_downloader.pmcid_from_pmid import get_pmcid_from_pmid
+    from pubmed_downloader.html_from_pmcid import get_html_from_pmcid
+    from pubmed_downloader.utils_bioc import format_supplement_as_markdown
 
     loop = asyncio.get_event_loop()
 
     async with _ncbi_semaphore:
-        pmcid_mapping = await loop.run_in_executor(
-            None, get_pmcid_from_pmid, [pmid]
-        )
+        pmcid_mapping = await loop.run_in_executor(None, get_pmcid_from_pmid, [pmid])
     pmcid = pmcid_mapping.get(str(pmid))
     if pmcid is None:
         return ConvertResult(
@@ -196,12 +192,10 @@ async def _convert_pmid(
     )
 
 
-async def _convert_pmcid(
-    pmcid: str, include_supplements: bool = True
-) -> ConvertResult:
+async def _convert_pmcid(pmcid: str, include_supplements: bool = True) -> ConvertResult:
     """Run the PMCID→markdown pipeline in a thread (it does blocking I/O)."""
-    from src.html_from_pmcid import get_html_from_pmcid
-    from src.utils_bioc import format_supplement_as_markdown
+    from pubmed_downloader.html_from_pmcid import get_html_from_pmcid
+    from pubmed_downloader.utils_bioc import format_supplement_as_markdown
 
     loop = asyncio.get_event_loop()
 
@@ -268,7 +262,11 @@ async def convert_pmid(
     if result.error and result.markdown is None:
         raise HTTPException(
             status_code=404,
-            detail={"error": "conversion_failed", "message": result.error, "pmid": pmid},
+            detail={
+                "error": "conversion_failed",
+                "message": result.error,
+                "pmid": pmid,
+            },
         )
     return result
 
@@ -312,7 +310,9 @@ async def _run_batch_pmid_job(job_id: str, pmids: List[str], include_supplements
     _jobs[job_id]["results"] = [r.model_dump() for r in results]
 
 
-async def _run_batch_pmcid_job(job_id: str, pmcids: List[str], include_supplements: bool):
+async def _run_batch_pmcid_job(
+    job_id: str, pmcids: List[str], include_supplements: bool
+):
     _jobs[job_id]["status"] = "running"
     results: List[ConvertResult] = []
     for pmcid in pmcids:

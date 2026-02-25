@@ -6,14 +6,14 @@ platforms = ["osx-arm64"]
 version = "0.1.0"
 
 [tasks]
-update-records = "python -m src.manage_records"
-convert-local-html = "python -m src.markdown_from_html"
-convert-local-pmids = "python -m src.pubmed_downloader --file_path=data/pmids.txt"
+update-records = "python -m pubmed_downloader.manage_records"
+convert-local-html = "python -m pubmed_downloader.markdown_from_html"
+convert-local-pmids = "python -m pubmed_downloader.pubmed_downloader --file_path=data/pmids.txt"
 clean-pharmgkb = "rm -rf data/variantAnnotations data/pharmgkb_pmids.txt"
-copy-markdown = "python -m src.copy_markdown"
+copy-markdown = "python -m pubmed_downloader.copy_markdown"
 black = "python -m black ."
-clear-caches = "python -m src.pubmed_downloader --clear_caches"
-add-supplements = "python -m src.pubmed_downloader --add_supplements"
+clear-caches = "python -m pubmed_downloader.pubmed_downloader --clear_caches"
+add-supplements = "python -m pubmed_downloader.pubmed_downloader --add_supplements"
 run-api = "uvicorn api:app --host 0.0.0.0 --port 8000 --reload"
 
 [dependencies]
