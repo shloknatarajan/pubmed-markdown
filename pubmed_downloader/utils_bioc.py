@@ -56,7 +56,9 @@ def fetch_bioc_supplement(pmcid: str, use_cache: bool = True) -> str | None:
         response = requests.get(url, timeout=30)
 
         if response.status_code != 200:
-            logger.debug(f"No supplements found for {pmcid} (HTTP {response.status_code})")
+            logger.debug(
+                f"No supplements found for {pmcid} (HTTP {response.status_code})"
+            )
             _save_cache(cache_path, {"not_available": True})
             return None
 
@@ -136,9 +138,7 @@ def _extract_text_from_bioc_structured(data: list | dict) -> list[dict[str, str]
                     passages.append(text)
 
             if passages:
-                documents.append(
-                    {"filename": filename, "text": "\n\n".join(passages)}
-                )
+                documents.append({"filename": filename, "text": "\n\n".join(passages)})
 
     return documents
 
@@ -270,7 +270,9 @@ def prefetch_bioc_supplements(pmcids: list[str], delay: float = 0.2) -> dict[str
 
         if (i + 1) % 10 == 0:
             hits = sum(1 for v in results.values() if v)
-            logger.info(f"Prefetched {i + 1}/{len(pmcids)} | Found: {hits} ({100*hits/(i+1):.1f}%)")
+            logger.info(
+                f"Prefetched {i + 1}/{len(pmcids)} | Found: {hits} ({100*hits/(i+1):.1f}%)"
+            )
 
         time.sleep(delay)
 

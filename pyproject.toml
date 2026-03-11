@@ -3,10 +3,26 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "pubmed-downloader"
+name = "pubmed-markdown"
 version = "0.1.0"
-description = "PubMed Central article fetching and markdown conversion"
+description = "Convert PubMed articles (PMIDs or PMCIDs) to clean, structured markdown with full text, abstracts, and supplementary materials"
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
+authors = [
+    { name = "Shlok Natarajan", email = "shlok.natarajan@gmail.com" },
+]
+keywords = ["pubmed", "pmc", "markdown", "bioinformatics", "pharmacogenomics"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
 dependencies = [
     "requests>=2.32.0",
     "beautifulsoup4>=4.13.0",
@@ -16,6 +32,14 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pandas>=2.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/shloknatarajan/PubMedDownloader"
+Repository = "https://github.com/shloknatarajan/PubMedDownloader"
+Issues = "https://github.com/shloknatarajan/PubMedDownloader/issues"
+
+[project.scripts]
+pubmed-download = "pubmed_downloader.pubmed_downloader:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["pubmed_downloader"]

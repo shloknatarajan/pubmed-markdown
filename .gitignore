@@ -11,6 +11,12 @@
 **/*.pyc
 **/.DS_Store
 
+ # build artifacts
+ dist/
+ build/
+*.whl
+*.tar.gz
+
 # data
 data/*
 

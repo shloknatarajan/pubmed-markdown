@@ -70,7 +70,9 @@ def get_abstract_markdown_from_pmid(pmid: str) -> Optional[str]:
             else:
                 abstract_parts.append(text)
 
-    abstract = "\n\n".join(abstract_parts) if abstract_parts else "No abstract available."
+    abstract = (
+        "\n\n".join(abstract_parts) if abstract_parts else "No abstract available."
+    )
 
     # Extract journal info
     journal = article.findtext(".//Journal/Title", "")
@@ -94,7 +96,9 @@ def get_abstract_markdown_from_pmid(pmid: str) -> Optional[str]:
     lines.append("")
     lines.append("---")
     lines.append("")
-    lines.append("**Note: This article is not available on PubMed Central (Open Access). Only the abstract is included below.**")
+    lines.append(
+        "**Note: This article is not available on PubMed Central (Open Access). Only the abstract is included below.**"
+    )
     lines.append("")
     lines.append("## Abstract")
     lines.append("")

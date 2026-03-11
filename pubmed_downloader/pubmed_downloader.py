@@ -24,7 +24,9 @@ class PubMedDownloader:
         self.html_to_markdown = PubMedHTMLToMarkdownConverter()
         self.save_dir = save_dir
 
-    def single_pmcid_to_markdown(self, pmcid: str, include_supplements: bool = True) -> Optional[str]:
+    def single_pmcid_to_markdown(
+        self, pmcid: str, include_supplements: bool = True
+    ) -> Optional[str]:
         """
         Convert a single PMCID directly to markdown, skipping PMID resolution.
 
@@ -54,7 +56,9 @@ class PubMedDownloader:
 
         return markdown
 
-    def single_pmid_to_markdown(self, pmid: str, include_supplements: bool = True) -> Optional[str]:
+    def single_pmid_to_markdown(
+        self, pmid: str, include_supplements: bool = True
+    ) -> Optional[str]:
         """
         Convert a single PMID to markdown. Falls back to abstract-only if no PMCID.
 
@@ -180,7 +184,10 @@ class PubMedDownloader:
             if supplement:
                 markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
             else:
-                markdown = markdown.rstrip() + "\n\n## Supplementary Materials\n\nNo supplementary materials found.\n"
+                markdown = (
+                    markdown.rstrip()
+                    + "\n\n## Supplementary Materials\n\nNo supplementary materials found.\n"
+                )
 
             md_path = os.path.join(
                 save_dir,
@@ -215,9 +222,7 @@ class PubMedDownloader:
                 logger.debug(
                     f"Lookup sample: PMID {key} -> {pmcid_mapping.get(key)} (in_mapping={key in pmcid_mapping})"
                 )
-        logger.info(
-            f"Valid PMCIDs: {len(valid_pmcids)} / {total} | Missing: {missing}"
-        )
+        logger.info(f"Valid PMCIDs: {len(valid_pmcids)} / {total} | Missing: {missing}")
         if sample:
             logger.debug(f"Sample PMCIDs: {sample}...")
         return valid_pmcids
@@ -274,6 +279,9 @@ class PubMedDownloader:
         # Normalize PMIDs
         pmids = [str(p).strip() for p in pmids]
 
+        # Ensure save_dir exists before any writes
+        os.makedirs(save_dir, exist_ok=True)
+
         # Get PMCID mapping for all PMIDs
         pmcid_mapping = get_pmcid_from_pmid(pmids, save_dir=save_dir)
 
@@ -296,9 +304,12 @@ class PubMedDownloader:
         if not overwrite:
             existing_markdown = self.check_existing_markdown_pmcids(save_dir)
             logger.info(f"Found {len(existing_markdown)} existing markdown files")
-            valid_pmcids = [pmcid for pmcid in valid_pmcids if pmcid not in existing_markdown]
+            valid_pmcids = [
+                pmcid for pmcid in valid_pmcids if pmcid not in existing_markdown
+            ]
             pmids_without_pmcid = [
-                pmid for pmid in pmids_without_pmcid
+                pmid
+                for pmid in pmids_without_pmcid
                 if f"PMID{pmid}" not in existing_markdown
             ]
 
@@ -316,7 +327,9 @@ class PubMedDownloader:
             markdown_dir = os.path.join(save_dir, "markdown")
             os.makedirs(markdown_dir, exist_ok=True)
 
-            for pmid in tqdm(pmids_without_pmcid, desc="Fetching abstracts for non-OA articles"):
+            for pmid in tqdm(
+                pmids_without_pmcid, desc="Fetching abstracts for non-OA articles"
+            ):
                 logger.warning(
                     f"PMID {pmid} is not available on PubMed Central (Open Access). "
                     f"Downloading abstract only."
@@ -327,7 +340,10 @@ class PubMedDownloader:
                     time.sleep(0.5)
                     continue
 
-                markdown = markdown.rstrip() + "\n\n## Supplementary Materials\n\nNo supplementary materials found.\n"
+                markdown = (
+                    markdown.rstrip()
+                    + "\n\n## Supplementary Materials\n\nNo supplementary materials found.\n"
+                )
 
                 md_path = os.path.join(markdown_dir, f"PMID{pmid}.md")
                 with open(md_path, "w") as f:
@@ -378,7 +394,9 @@ class PubMedDownloader:
             # that is not the BioC supplement text we add (often just a link/stub).
             # Only skip when BioC-style content is already present (e.g., headings
             # that look like supplementary PDF filenames).
-            has_bioc_supplements = bool(re.search(r"^###\s+.*\.pdf\s*$", content, re.MULTILINE))
+            has_bioc_supplements = bool(
+                re.search(r"^###\s+.*\.pdf\s*$", content, re.MULTILINE)
+            )
 
             if has_supplements and has_bioc_supplements and not overwrite:
                 skipped += 1
@@ -399,9 +417,7 @@ class PubMedDownloader:
                 f.write(content)
             added += 1
 
-        logger.info(
-            f"Supplements added: {added}, skipped (already present): {skipped}"
-        )
+        logger.info(f"Supplements added: {added}, skipped (already present): {skipped}")
 
 
 def clear_all_caches() -> None:
@@ -458,6 +474,7 @@ def clear_all_caches() -> None:
     except Exception as e:
         logger.error(f"Error while clearing caches: {e}")
 
+
 def convert_pmids_from_file(
     file_path: str, save_dir: str = "data", overwrite: bool = False
 ):
@@ -475,7 +492,8 @@ def convert_pmids_from_file(
     converter.pmids_to_markdown(pmids, save_dir, overwrite)
 
 
-if __name__ == "__main__":
+def main():
+    """CLI entry point for pubmed-download."""
     parser = argparse.ArgumentParser(description="Convert PMIDs to markdown format")
     parser.add_argument(
         "--file_path", type=str, help="Path to the txt file containing PMIDs"
@@ -511,4 +529,10 @@ if __name__ == "__main__":
     elif args.file_path:
         convert_pmids_from_file(args.file_path, args.save_dir, args.overwrite)
     else:
-        parser.error("--file_path is required (or use --clear_caches / --add_supplements)")
+        parser.error(
+            "--file_path is required (or use --clear_caches / --add_supplements)"
+        )
+
+
+if __name__ == "__main__":
+    main()

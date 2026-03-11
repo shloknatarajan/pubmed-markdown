@@ -138,7 +138,9 @@ def get_pmcid_from_pmid(
         )
         total_count = len(results)
         missing_count = total_count - valid_count
-        sample = ", ".join([str(p) for p in list({v for v in results.values() if v is not None})[:5]])
+        sample = ", ".join(
+            [str(p) for p in list({v for v in results.values() if v is not None})[:5]]
+        )
         logger.info(
             f"All PMIDs found in cache | Valid PMCIDs: {valid_count} / {total_count} | Missing: {missing_count}"
         )
@@ -174,7 +176,9 @@ def get_pmcid_from_pmid(
             for record in records:
                 # Normalize to string keys (strip whitespace) to ensure consistent lookups downstream
                 pmid = (
-                    str(record.get("pmid")).strip() if record.get("pmid") is not None else None
+                    str(record.get("pmid")).strip()
+                    if record.get("pmid") is not None
+                    else None
                 )
                 pmcid = record.get("pmcid")
                 if pmid is not None:
@@ -226,7 +230,9 @@ def get_pmcid_from_pmid(
     valid_count = sum(1 for v in results.values() if v is not None)
     total_count = len(pmids)
     missing_count = total_count - valid_count
-    sample = ", ".join([str(p) for p in list({v for v in results.values() if v is not None})[:5]])
+    sample = ", ".join(
+        [str(p) for p in list({v for v in results.values() if v is not None})[:5]]
+    )
     logger.info(
         f"Processed {total_count} PMIDs | Valid PMCIDs: {valid_count} | Missing: {missing_count} | Sources: {cached_count} from cache, {len(pmids_to_fetch)} from API"
     )
