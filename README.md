@@ -1,5 +1,7 @@
 # PubMed Downloader
 
+[![PyPI](https://img.shields.io/pypi/v/pubmed-markdown)](https://pypi.org/project/pubmed-markdown/)
+
 Convert PubMed articles to clean, structured markdown. Handles the full pipeline: PMID resolution, full-text extraction via PubMed Central, HTML-to-markdown conversion, and supplementary material retrieval.
 
 Articles without open-access full text automatically fall back to abstract-only download.
