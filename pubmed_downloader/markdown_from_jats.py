@@ -446,7 +446,11 @@ class JATSToMarkdownConverter:
                 row_data = []
                 for cell in cells:
                     colspan = int(cell.get("colspan", 1))
-                    text = self._clean_text(cell.get_text()).replace("|", "\\|").replace("\n", " ")
+                    text = (
+                        self._clean_text(cell.get_text())
+                        .replace("|", "\\|")
+                        .replace("\n", " ")
+                    )
                     if not text:
                         text = " "
                     row_data.append(text)
@@ -462,14 +466,18 @@ class JATSToMarkdownConverter:
         else:
             body_rows = table.find_all("tr")
             if header_rows:
-                body_rows = body_rows[len(header_rows):]
+                body_rows = body_rows[len(header_rows) :]
 
         for row in body_rows:
             cells = row.find_all(["td", "th"])
             row_data = []
             for cell in cells:
                 colspan = int(cell.get("colspan", 1))
-                text = self._clean_text(cell.get_text()).replace("|", "\\|").replace("\n", " ")
+                text = (
+                    self._clean_text(cell.get_text())
+                    .replace("|", "\\|")
+                    .replace("\n", " ")
+                )
                 if not text:
                     text = " "
                 row_data.append(text)
@@ -496,7 +504,7 @@ class JATSToMarkdownConverter:
         for row in data_rows:
             while len(row) < len(header):
                 row.append("")
-            lines.append("| " + " | ".join(row[:len(header)]) + " |")
+            lines.append("| " + " | ".join(row[: len(header)]) + " |")
 
         return "\n".join(lines)
 
