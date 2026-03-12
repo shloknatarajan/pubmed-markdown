@@ -1,6 +1,7 @@
 from .pmcid_from_pmid import get_pmcid_from_pmid
 from .html_from_pmcid import get_html_from_pmcid
 from .markdown_from_html import PubMedHTMLToMarkdownConverter
+from .markdown_from_jats import JATSToMarkdownConverter
 from .utils_bioc import format_supplement_as_markdown, prefetch_bioc_supplements
 from .abstract_from_pmid import get_abstract_markdown_from_pmid
 from typing import List, Optional
@@ -22,6 +23,7 @@ class PubMedDownloader:
 
     def __init__(self, save_dir: str = "data"):
         self.html_to_markdown = PubMedHTMLToMarkdownConverter()
+        self.jats_to_markdown = JATSToMarkdownConverter()
         self.save_dir = save_dir
 
     def single_pmcid_to_markdown(
@@ -30,6 +32,8 @@ class PubMedDownloader:
         """
         Convert a single PMCID directly to markdown, skipping PMID resolution.
 
+        Fetches JATS XML via NCBI E-utilities and converts to markdown.
+
         Args:
             pmcid (str): The PMCID to convert (e.g. "PMC1234567")
             include_supplements (bool): Whether to append supplementary materials (default: True)
@@ -37,15 +41,15 @@ class PubMedDownloader:
         Returns:
             Optional[str]: The markdown content if successful, None if any step fails
         """
-        html = get_html_from_pmcid(pmcid)
-        if html is None:
+        xml = get_html_from_pmcid(pmcid)
+        if xml is None:
             return None
 
         try:
-            markdown = self.html_to_markdown.convert_html(html)
+            markdown = self.jats_to_markdown.convert_xml(xml)
         except Exception as e:
             logger.error(
-                f"Error converting HTML to markdown for PMCID {pmcid}: {str(e)}"
+                f"Error converting XML to markdown for PMCID {pmcid}: {str(e)}"
             )
             return None
 
@@ -80,16 +84,16 @@ class PubMedDownloader:
             )
             return get_abstract_markdown_from_pmid(pmid)
 
-        # Get HTML
-        html = get_html_from_pmcid(pmcid)
-        if html is None:
+        # Get JATS XML via E-utilities
+        xml = get_html_from_pmcid(pmcid)
+        if xml is None:
             return None
 
         # Convert to markdown
         try:
-            markdown = self.html_to_markdown.convert_html(html)
+            markdown = self.jats_to_markdown.convert_xml(xml)
         except Exception as e:
-            logger.error(f"Error converting HTML to markdown for PMID {pmid}: {str(e)}")
+            logger.error(f"Error converting XML to markdown for PMID {pmid}: {str(e)}")
             return None
 
         # Append supplementary materials
