@@ -5,6 +5,7 @@ from .utils_bioc import format_supplement_as_markdown, prefetch_bioc_supplements
 from .abstract_from_pmid import get_abstract_markdown_from_pmid
 from typing import List, Optional
 import os
+from dotenv import load_dotenv
 from loguru import logger
 from tqdm import tqdm
 import argparse
@@ -13,16 +14,25 @@ import shutil
 import re
 import time
 
+load_dotenv()
+
 
 class PubMedDownloader:
     """
     Args:
         save_dir (str): Directory to save the files to (default: "data/")
+        email (str, optional): Email for NCBI API identification. Falls back to NCBI_EMAIL env var.
     """
 
-    def __init__(self, save_dir: str = "data"):
+    def __init__(self, save_dir: str = "data", email: Optional[str] = None):
         self.html_to_markdown = PubMedHTMLToMarkdownConverter()
         self.save_dir = save_dir
+        self.email = email or os.getenv("NCBI_EMAIL")
+        if not self.email:
+            logger.warning(
+                "No NCBI email configured. Set NCBI_EMAIL environment variable "
+                "or pass email to PubMedDownloader(). NCBI may block requests (403)."
+            )
 
     def single_pmcid_to_markdown(
         self, pmcid: str, include_supplements: bool = True
@@ -70,7 +80,7 @@ class PubMedDownloader:
             Optional[str]: The markdown content if successful, None if any step fails
         """
         # Get PMCID
-        pmcid_mapping = get_pmcid_from_pmid([pmid])
+        pmcid_mapping = get_pmcid_from_pmid([pmid], email=self.email)
         pmcid = pmcid_mapping.get(str(pmid))
 
         if pmcid is None:
@@ -78,7 +88,7 @@ class PubMedDownloader:
                 f"PMID {pmid} is not available on PubMed Central (Open Access). "
                 f"Downloading abstract only."
             )
-            return get_abstract_markdown_from_pmid(pmid)
+            return get_abstract_markdown_from_pmid(pmid, email=self.email)
 
         # Get HTML
         html = get_html_from_pmcid(pmcid)
@@ -205,7 +215,7 @@ class PubMedDownloader:
         pmids = [str(p).strip() for p in pmids]
         total = len(pmids)
         logger.info(f"Getting PMCIDs for {total} PMIDs")
-        pmcid_mapping = get_pmcid_from_pmid(pmids, save_dir=save_dir)
+        pmcid_mapping = get_pmcid_from_pmid(pmids, email=self.email, save_dir=save_dir)
         # Lookup using normalized keys
         pmcids = [pmcid_mapping.get(str(pmid).strip()) for pmid in pmids]
         valid_pmcids = [pmcid for pmcid in pmcids if pmcid is not None]
@@ -283,7 +293,7 @@ class PubMedDownloader:
         os.makedirs(save_dir, exist_ok=True)
 
         # Get PMCID mapping for all PMIDs
-        pmcid_mapping = get_pmcid_from_pmid(pmids, save_dir=save_dir)
+        pmcid_mapping = get_pmcid_from_pmid(pmids, email=self.email, save_dir=save_dir)
 
         # Split into PMIDs with and without PMCIDs
         pmids_with_pmcid = []
@@ -334,7 +344,7 @@ class PubMedDownloader:
                     f"PMID {pmid} is not available on PubMed Central (Open Access). "
                     f"Downloading abstract only."
                 )
-                markdown = get_abstract_markdown_from_pmid(pmid)
+                markdown = get_abstract_markdown_from_pmid(pmid, email=self.email)
                 if markdown is None:
                     logger.error(f"Failed to fetch abstract for PMID {pmid}")
                     time.sleep(0.5)
@@ -476,7 +486,10 @@ def clear_all_caches() -> None:
 
 
 def convert_pmids_from_file(
-    file_path: str, save_dir: str = "data", overwrite: bool = False
+    file_path: str,
+    save_dir: str = "data",
+    overwrite: bool = False,
+    email: Optional[str] = None,
 ):
     """
     Convert pmids from a txt file to markdown
@@ -486,8 +499,9 @@ def convert_pmids_from_file(
         file_path (str): Path to the txt file containing PMIDs
         save_dir (str): Directory to save the files to (default: "data/")
         overwrite (bool): Whether to overwrite existing markdown files (default: False)
+        email (str, optional): Email for NCBI API identification.
     """
-    converter = PubMedDownloader()
+    converter = PubMedDownloader(email=email)
     pmids = [line.strip() for line in open(file_path, "r").readlines() if line.strip()]
     converter.pmids_to_markdown(pmids, save_dir, overwrite)
 
@@ -519,15 +533,23 @@ def main():
         action="store_true",
         help="Add supplementary materials to existing markdown files",
     )
+    parser.add_argument(
+        "--email",
+        type=str,
+        default=None,
+        help="Email for NCBI API identification (overrides NCBI_EMAIL env var)",
+    )
     args = parser.parse_args()
 
     if args.clear_caches:
         clear_all_caches()
     elif args.add_supplements:
-        downloader = PubMedDownloader()
+        downloader = PubMedDownloader(email=args.email)
         downloader.add_supplements_to_existing(args.save_dir, args.overwrite)
     elif args.file_path:
-        convert_pmids_from_file(args.file_path, args.save_dir, args.overwrite)
+        convert_pmids_from_file(
+            args.file_path, args.save_dir, args.overwrite, email=args.email
+        )
     else:
         parser.error(
             "--file_path is required (or use --clear_caches / --add_supplements)"

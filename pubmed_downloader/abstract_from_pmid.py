@@ -5,28 +5,45 @@ Fetches the abstract and basic metadata for articles that are not available
 in PubMed Central (no PMCID). Returns a simple markdown-formatted string.
 """
 
+import os
 import requests
 import xml.etree.ElementTree as ET
 from typing import Optional
+from dotenv import load_dotenv
 from loguru import logger
 
+load_dotenv()
 
-def get_abstract_markdown_from_pmid(pmid: str) -> Optional[str]:
+
+def get_abstract_markdown_from_pmid(
+    pmid: str, email: Optional[str] = None
+) -> Optional[str]:
     """
     Fetch the abstract and metadata for a PMID from PubMed and return as markdown.
 
     Args:
         pmid (str): The PubMed ID to fetch
+        email (str, optional): Email for NCBI API identification. Falls back to NCBI_EMAIL env var.
 
     Returns:
         Optional[str]: Markdown-formatted abstract with title/authors, or None on failure
     """
+    if not email:
+        email = os.getenv("NCBI_EMAIL")
+    if not email:
+        logger.warning(
+            "No email provided. Please set the NCBI_EMAIL environment variable "
+            "or pass email explicitly. NCBI may block requests without identification."
+        )
+
     url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
     params = {
         "db": "pubmed",
         "id": pmid,
         "rettype": "xml",
         "retmode": "xml",
+        "tool": "pubmed_downloader",
+        "email": email,
     }
 
     try:
