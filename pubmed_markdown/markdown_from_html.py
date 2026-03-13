@@ -10,10 +10,8 @@ in pubmed_html_to_markdown_conversion_process.md
 import re
 import html
 from typing import Dict
-import os
 from bs4 import BeautifulSoup, Tag, NavigableString
 from loguru import logger
-import tqdm
 
 
 class PubMedHTMLToMarkdownConverter:
@@ -691,34 +689,5 @@ def main():
         sys.exit(1)
 
 
-def run_local():
-    converter = PubMedHTMLToMarkdownConverter()
-    input_files = os.listdir("data/html")
-    for file in tqdm.tqdm(input_files, desc="Converting HTML to Markdown"):
-        converter = PubMedHTMLToMarkdownConverter()
-        markdown_content = converter.convert_file(f"data/html/{file}")
-        os.makedirs("data/markdown", exist_ok=True)
-        with open(
-            f"data/markdown/{file.replace('.html', '.md')}", "w", encoding="utf-8"
-        ) as f:
-            f.write(markdown_content)
-    logger.info(f"Converted {len(input_files)} HTML files to Markdown")
-
-
-def single_file(pmcid: str):
-    converter = PubMedHTMLToMarkdownConverter()
-    markdown_content = converter.convert_file(f"data/html/{pmcid}.html")
-    os.makedirs("data/markdown", exist_ok=True)
-    with open(f"data/markdown/{pmcid}.md", "w", encoding="utf-8") as f:
-        f.write(markdown_content)
-    logger.info(f"Converted {pmcid} to Markdown")
-
-
 if __name__ == "__main__":
-    import sys
-
-    args = sys.argv[1:]
-    if args:
-        single_file(args[0])
-    else:
-        run_local()
+    main()

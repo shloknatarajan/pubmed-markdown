@@ -3,10 +3,9 @@ PMCID --> Full Article Text (HTML)
 This uses a standard get request with a user agent and accept header to fetch the article text.
 """
 
-import argparse
 import requests
 from loguru import logger
-from typing import List, Optional, Union
+from typing import Optional
 
 
 def get_html_from_pmcid(pmcid: str) -> Optional[str]:
@@ -48,30 +47,3 @@ def get_html_from_pmcid(pmcid: str) -> Optional[str]:
     except requests.exceptions.RequestException as e:
         logger.error(f"An error occurred while fetching PMCID {pmcid}: {str(e)}")
         return None
-
-
-def main():
-    """Entry point for markdown from pmid"""
-    parser = argparse.ArgumentParser(
-        description="Fetch and save article text from NCBI"
-    )
-    parser.add_argument("--pmcid", type=str, help="PMCID of the article to fetch")
-    parser.add_argument(
-        "--save_dir",
-        default="data/articles",
-        type=str,
-        help="Path to save the article text",
-    )
-    args = parser.parse_args()
-
-    if not args.pmcid:
-        parser.error("--pmcid is required")
-
-    text = get_html_from_pmcid(args.pmcid)
-    if text is not None:
-        with open(f"{args.save_dir}/{args.pmcid}.html", "w") as f:
-            f.write(text)
-
-
-if __name__ == "__main__":
-    main()

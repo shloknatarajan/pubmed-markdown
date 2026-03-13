@@ -27,23 +27,6 @@ def get_scraped_pmids(update: bool = False) -> List[str]:
     return pmid_list
 
 
-def get_scraped_pmcids(update: bool = False) -> List[str]:
-    """
-    Get a list of all the PMCIDs in the records.csv file
-
-    Args:
-        update (bool): If True, create a new records.csv file
-    Returns:
-        List[str]: A list of all the PMIDs in the records.csv file
-    """
-    if update:
-        records = create_records()
-    else:
-        records = pd.read_csv(os.path.join("data", "records.csv"))
-    pmcid_list = records["pmcid"].tolist()
-    return pmcid_list
-
-
 def parse_markdown_metadata(markdown_text: str) -> dict:
     """
     Extract PMID, PMCID, and URL from a markdown text.
