@@ -85,9 +85,7 @@ def test_single_pmid(mock_get, tmp_path, monkeypatch):
 
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    mock_resp.json.return_value = {
-        "records": [{"pmid": "12345", "pmcid": "PMC111"}]
-    }
+    mock_resp.json.return_value = {"records": [{"pmid": "12345", "pmcid": "PMC111"}]}
     mock_resp.raise_for_status.return_value = None
     mock_get.return_value = mock_resp
 
@@ -153,9 +151,7 @@ def test_caching_avoids_api_call(mock_get, tmp_path, monkeypatch):
     monkeypatch.setenv("PMID_CACHE_FILE", "test.json")
 
     # Pre-populate cache
-    cache_data = {
-        "12345": {"pmcid": "PMC999", "timestamp": datetime.now().isoformat()}
-    }
+    cache_data = {"12345": {"pmcid": "PMC999", "timestamp": datetime.now().isoformat()}}
     (tmp_path / "test.json").write_text(json.dumps(cache_data))
 
     result = get_pmcid_from_pmid("12345", email="test@test.com", use_cache=True)
@@ -195,13 +191,9 @@ def test_whitespace_normalization(mock_get, tmp_path, monkeypatch):
 
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    mock_resp.json.return_value = {
-        "records": [{"pmid": "12345", "pmcid": "PMC111"}]
-    }
+    mock_resp.json.return_value = {"records": [{"pmid": "12345", "pmcid": "PMC111"}]}
     mock_resp.raise_for_status.return_value = None
     mock_get.return_value = mock_resp
 
-    result = get_pmcid_from_pmid(
-        "  12345  ", email="test@test.com", use_cache=False
-    )
+    result = get_pmcid_from_pmid("  12345  ", email="test@test.com", use_cache=False)
     assert result["12345"] == "PMC111"

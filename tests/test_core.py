@@ -186,7 +186,9 @@ def test_pmid_to_markdown_no_pmcid_no_abstract(mock_pmcid, converter):
 @patch("pubmed_markdown.core.format_supplement_as_markdown")
 @patch("pubmed_markdown.core.get_html_from_pmcid")
 @patch("pubmed_markdown.core.get_pmcid_from_pmid")
-def test_pmids_to_markdown_files_batch(mock_pmcid, mock_html, mock_supp, mock_abstract, tmp_path):
+def test_pmids_to_markdown_files_batch(
+    mock_pmcid, mock_html, mock_supp, mock_abstract, tmp_path
+):
     """Full batch: one article with PMCID, one without."""
     mock_pmcid.return_value = {"111": "PMC001", "222": None}
     mock_html.return_value = SAMPLE_HTML
@@ -216,7 +218,9 @@ def test_pmids_to_markdown_files_batch(mock_pmcid, mock_html, mock_supp, mock_ab
 @patch("pubmed_markdown.core.format_supplement_as_markdown")
 @patch("pubmed_markdown.core.get_html_from_pmcid")
 @patch("pubmed_markdown.core.get_pmcid_from_pmid")
-def test_pmids_to_markdown_files_single_string(mock_pmcid, mock_html, mock_supp, mock_abstract, tmp_path):
+def test_pmids_to_markdown_files_single_string(
+    mock_pmcid, mock_html, mock_supp, mock_abstract, tmp_path
+):
     """Accepts a single PMID string."""
     mock_pmcid.return_value = {"111": "PMC001"}
     mock_html.return_value = SAMPLE_HTML
@@ -368,7 +372,9 @@ def test_convert_pmids_from_file(mock_method, tmp_path):
     pmid_file = tmp_path / "pmids.txt"
     pmid_file.write_text("111\n222\n333\n")
 
-    convert_pmids_from_file(str(pmid_file), save_dir=str(tmp_path), email="test@test.com")
+    convert_pmids_from_file(
+        str(pmid_file), save_dir=str(tmp_path), email="test@test.com"
+    )
 
     mock_method.assert_called_once()
     args = mock_method.call_args

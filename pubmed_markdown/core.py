@@ -218,7 +218,9 @@ class PubMedMarkdown:
             with open(md_path, "w") as f:
                 f.write(markdown)
 
-    def pmids_to_pmcids(self, pmids: Union[str, List[str]], save_dir: str = "data") -> List[str]:
+    def pmids_to_pmcids(
+        self, pmids: Union[str, List[str]], save_dir: str = "data"
+    ) -> List[str]:
         """
         Convert one or more PMIDs to PMCIDs.
 
@@ -253,7 +255,9 @@ class PubMedMarkdown:
             logger.debug(f"Sample PMCIDs: {sample}...")
         return valid_pmcids
 
-    def pmcids_to_html(self, pmcids: Union[str, List[str]], save_dir: str = "data") -> None:
+    def pmcids_to_html(
+        self, pmcids: Union[str, List[str]], save_dir: str = "data"
+    ) -> None:
         """
         Convert one or more PMCIDs to HTML and save to disk.
 
