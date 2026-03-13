@@ -9,11 +9,9 @@ version = "0.1.0"
 update-records = "python -m pubmed_markdown.manage_records"
 convert-local-html = "python -m pubmed_markdown.markdown_from_html"
 convert-local-pmids = "python -m pubmed_markdown.core --file_path=data/pmids.txt"
-clean-pharmgkb = "rm -rf data/variantAnnotations data/pharmgkb_pmids.txt"
 copy-markdown = "python -m pubmed_markdown.copy_markdown"
 black = "python -m black ."
 clear-caches = "python -m pubmed_markdown.core --clear_caches"
-add-supplements = "python -m pubmed_markdown.core --add_supplements"
 run-api = "uvicorn api:app --host 0.0.0.0 --port 8000 --reload"
 
 [dependencies]

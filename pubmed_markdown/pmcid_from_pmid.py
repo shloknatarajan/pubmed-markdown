@@ -13,8 +13,14 @@ load_dotenv()
 
 
 def _get_cache_file_path() -> Path:
-    """Get the cache file path from environment or default."""
-    cache_dir = os.getenv("PMID_CACHE_DIR", "data/cache")
+    """Get the cache file path from environment or default.
+
+    Defaults to ~/.cache/pubmed-markdown/pmid_to_pmcid.json so the package
+    never writes to the user's working directory unexpectedly.
+    """
+    cache_dir = os.getenv(
+        "PMID_CACHE_DIR", str(Path.home() / ".cache" / "pubmed-markdown")
+    )
     cache_file = os.getenv("PMID_CACHE_FILE", "pmid_to_pmcid.json")
     cache_path = Path(cache_dir) / cache_file
     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -65,8 +71,6 @@ def get_pmcid_from_pmid(
     delay: float = 0.4,
     use_cache: bool = True,
     cache_expiry_days: int = 30,
-    save_dir: str = "data",
-    override: bool = False,
 ) -> Dict[str, Optional[str]]:
     """
     Convert a list of PMIDs to PMCIDs using NCBI's ID Converter API.
@@ -213,18 +217,6 @@ def get_pmcid_from_pmid(
     # Save updated cache (if we fetched anything new)
     if use_cache and pmids_to_fetch:
         _save_cache(cache)
-
-    # Save results to file (always save, even if all results were served from cache)
-    if save_dir is not None:
-        results_path = os.path.join(
-            save_dir,
-            f"pmcid_from_pmid_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-        )
-        logger.info(f"Saving results to {results_path}")
-        # Always write the results file for this run to avoid downstream consumers reading stale files
-        # Respect 'override' only for same-path overwrites (timestamp path makes collisions unlikely)
-        with open(results_path, "w") as f:
-            json.dump(results, f, indent=2)
 
     # Final summary logging with counts and a small sample
     valid_count = sum(1 for v in results.values() if v is not None)

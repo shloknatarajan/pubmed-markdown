@@ -1,9 +1,9 @@
 from .pmcid_from_pmid import get_pmcid_from_pmid
 from .html_from_pmcid import get_html_from_pmcid
 from .markdown_from_html import PubMedHTMLToMarkdownConverter
-from .utils_bioc import format_supplement_as_markdown, prefetch_bioc_supplements
+from .utils_bioc import format_supplement_as_markdown
 from .abstract_from_pmid import get_abstract_markdown_from_pmid
-from typing import List, Optional
+from typing import List, Optional, Union
 import os
 from dotenv import load_dotenv
 from loguru import logger
@@ -11,7 +11,6 @@ from tqdm import tqdm
 import argparse
 from pathlib import Path
 import shutil
-import re
 import time
 
 load_dotenv()
@@ -34,19 +33,10 @@ class PubMedMarkdown:
                 "or pass email to PubMedMarkdown(). NCBI may block requests (403)."
             )
 
-    def single_pmcid_to_markdown(
+    def _single_pmcid_to_markdown(
         self, pmcid: str, include_supplements: bool = True
     ) -> Optional[str]:
-        """
-        Convert a single PMCID directly to markdown, skipping PMID resolution.
-
-        Args:
-            pmcid (str): The PMCID to convert (e.g. "PMC1234567")
-            include_supplements (bool): Whether to append supplementary materials (default: True)
-
-        Returns:
-            Optional[str]: The markdown content if successful, None if any step fails
-        """
+        """Convert a single PMCID to markdown. Internal helper."""
         html = get_html_from_pmcid(pmcid)
         if html is None:
             return None
@@ -66,20 +56,34 @@ class PubMedMarkdown:
 
         return markdown
 
-    def single_pmid_to_markdown(
-        self, pmid: str, include_supplements: bool = True
-    ) -> Optional[str]:
+    def pmcids_to_markdown(
+        self,
+        pmcids: Union[str, List[str]],
+        include_supplements: bool = True,
+    ) -> Union[Optional[str], List[Optional[str]]]:
         """
-        Convert a single PMID to markdown. Falls back to abstract-only if no PMCID.
+        Convert one or more PMCIDs directly to markdown, skipping PMID resolution.
 
         Args:
-            pmid (str): The PMID to convert
+            pmcids (str or List[str]): A single PMCID or list of PMCIDs (e.g. "PMC1234567")
             include_supplements (bool): Whether to append supplementary materials (default: True)
 
         Returns:
-            Optional[str]: The markdown content if successful, None if any step fails
+            If a single PMCID string was passed: Optional[str] — the markdown or None.
+            If a list was passed: List[Optional[str]] — one result per input PMCID.
         """
-        # Get PMCID
+        if isinstance(pmcids, str):
+            return self._single_pmcid_to_markdown(pmcids, include_supplements)
+
+        return [
+            self._single_pmcid_to_markdown(pmcid, include_supplements)
+            for pmcid in tqdm(pmcids, desc="Converting PMCIDs to markdown")
+        ]
+
+    def _single_pmid_to_markdown(
+        self, pmid: str, include_supplements: bool = True
+    ) -> Optional[str]:
+        """Convert a single PMID to markdown. Internal helper."""
         pmcid_mapping = get_pmcid_from_pmid([pmid], email=self.email)
         pmcid = pmcid_mapping.get(str(pmid))
 
@@ -90,25 +94,32 @@ class PubMedMarkdown:
             )
             return get_abstract_markdown_from_pmid(pmid, email=self.email)
 
-        # Get HTML
-        html = get_html_from_pmcid(pmcid)
-        if html is None:
-            return None
+        return self._single_pmcid_to_markdown(pmcid, include_supplements)
 
-        # Convert to markdown
-        try:
-            markdown = self.html_to_markdown.convert_html(html)
-        except Exception as e:
-            logger.error(f"Error converting HTML to markdown for PMID {pmid}: {str(e)}")
-            return None
+    def pmid_to_markdown(
+        self,
+        pmid: Union[str, List[str]],
+        include_supplements: bool = True,
+    ) -> Union[Optional[str], List[Optional[str]]]:
+        """
+        Convert one or more PMIDs to markdown (returned as strings, not saved to disk).
+        Falls back to abstract-only if no PMCID is available.
 
-        # Append supplementary materials
-        if include_supplements:
-            supplement = format_supplement_as_markdown(pmcid)
-            if supplement:
-                markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
+        Args:
+            pmid (str or List[str]): A single PMID or list of PMIDs
+            include_supplements (bool): Whether to append supplementary materials (default: True)
 
-        return markdown
+        Returns:
+            If a single PMID string was passed: Optional[str] — the markdown or None.
+            If a list was passed: List[Optional[str]] — one result per input PMID.
+        """
+        if isinstance(pmid, str):
+            return self._single_pmid_to_markdown(pmid, include_supplements)
+
+        return [
+            self._single_pmid_to_markdown(p, include_supplements)
+            for p in tqdm(pmid, desc="Converting PMIDs to markdown")
+        ]
 
     def check_existing_html_pmcids(self, save_dir: str = "data/") -> List[str]:
         """
@@ -207,15 +218,20 @@ class PubMedMarkdown:
             with open(md_path, "w") as f:
                 f.write(markdown)
 
-    def pmids_to_pmcids(self, pmids: List[str], save_dir: str = "data") -> List[str]:
+    def pmids_to_pmcids(self, pmids: Union[str, List[str]], save_dir: str = "data") -> List[str]:
         """
-        Convert a list of pmids to pmcids
+        Convert one or more PMIDs to PMCIDs.
+
+        Args:
+            pmids (str or List[str]): A single PMID or list of PMIDs
+            save_dir (str): Directory for output (default: "data")
         """
-        # Normalize PMIDs to strings without surrounding whitespace for consistent keying
+        if isinstance(pmids, str):
+            pmids = [pmids]
         pmids = [str(p).strip() for p in pmids]
         total = len(pmids)
         logger.info(f"Getting PMCIDs for {total} PMIDs")
-        pmcid_mapping = get_pmcid_from_pmid(pmids, email=self.email, save_dir=save_dir)
+        pmcid_mapping = get_pmcid_from_pmid(pmids, email=self.email)
         # Lookup using normalized keys
         pmcids = [pmcid_mapping.get(str(pmid).strip()) for pmid in pmids]
         valid_pmcids = [pmcid for pmcid in pmcids if pmcid is not None]
@@ -237,15 +253,16 @@ class PubMedMarkdown:
             logger.debug(f"Sample PMCIDs: {sample}...")
         return valid_pmcids
 
-    def pmcids_to_html(self, pmcids: List[str], save_dir: str = "data") -> None:
+    def pmcids_to_html(self, pmcids: Union[str, List[str]], save_dir: str = "data") -> None:
         """
-        Convert a list of pmcids to html
-        Save raw html to save_dir/html and markdown to save_dir/markdown
+        Convert one or more PMCIDs to HTML and save to disk.
 
         Args:
-            pmcids (List[str]): List of PMCIDs to convert
+            pmcids (str or List[str]): A single PMCID or list of PMCIDs
             save_dir (str): Directory to save the files to (default: "data/")
         """
+        if isinstance(pmcids, str):
+            pmcids = [pmcids]
         # Create necessary directories
         html_dir = os.path.join(save_dir, "html")
         markdown_dir = os.path.join(save_dir, "markdown")
@@ -275,25 +292,30 @@ class PubMedMarkdown:
                 logger.error(f"Error saving HTML for PMCID {pmcid}: {str(e)}")
                 continue
 
-    def pmids_to_markdown(
-        self, pmids: List[str], save_dir: str = "data", overwrite: bool = False
+    def pmids_to_markdown_files(
+        self,
+        pmids: Union[str, List[str]],
+        save_dir: str = "data",
+        overwrite: bool = False,
     ) -> None:
         """
-        Convert a list of pmids to markdown
+        Convert one or more PMIDs to markdown and save to disk.
 
         Args:
-            pmids (List[str]): List of PMIDs to convert
+            pmids (str or List[str]): A single PMID or list of PMIDs to convert
             save_dir (str): Directory to save the files to (default: "data/")
             overwrite (bool): Whether to overwrite existing files (default: False)
         """
-        # Normalize PMIDs
+        # Normalize to list
+        if isinstance(pmids, str):
+            pmids = [pmids]
         pmids = [str(p).strip() for p in pmids]
 
         # Ensure save_dir exists before any writes
         os.makedirs(save_dir, exist_ok=True)
 
         # Get PMCID mapping for all PMIDs
-        pmcid_mapping = get_pmcid_from_pmid(pmids, email=self.email, save_dir=save_dir)
+        pmcid_mapping = get_pmcid_from_pmid(pmids, email=self.email)
 
         # Split into PMIDs with and without PMCIDs
         pmids_with_pmcid = []
@@ -306,10 +328,6 @@ class PubMedMarkdown:
                 pmids_without_pmcid.append(pmid)
 
         valid_pmcids = [pmcid for _, pmcid in pmids_with_pmcid]
-
-        # Save found pmcids
-        with open(os.path.join(save_dir, "pmcids.txt"), "w") as f:
-            f.write("\n".join(valid_pmcids))
 
         if not overwrite:
             existing_markdown = self.check_existing_markdown_pmcids(save_dir)
@@ -362,80 +380,13 @@ class PubMedMarkdown:
                 # Respect NCBI rate limit (~3 requests/sec without API key)
                 time.sleep(0.4)
 
-    def add_supplements_to_existing(
-        self, save_dir: str = "data", overwrite: bool = False
-    ) -> None:
-        """
-        Scan existing markdown files and append supplementary materials.
-
-        Args:
-            save_dir: Directory containing the markdown/ subdirectory
-            overwrite: If True, re-fetch and replace existing supplement sections
-        """
-        markdown_dir = os.path.join(save_dir, "markdown")
-        if not os.path.exists(markdown_dir):
-            logger.warning(f"No markdown directory found at {markdown_dir}")
-            return
-
-        md_files = [f for f in os.listdir(markdown_dir) if f.endswith(".md")]
-        if not md_files:
-            logger.info("No markdown files found")
-            return
-
-        # Extract PMCIDs from filenames
-        pmcids = [f.replace(".md", "") for f in md_files]
-
-        # Prefetch supplements in batch
-        logger.info(f"Prefetching supplements for {len(pmcids)} articles")
-        prefetch_bioc_supplements(pmcids)
-
-        added = 0
-        skipped = 0
-        for md_file in tqdm(md_files, desc="Adding supplements"):
-            md_path = os.path.join(markdown_dir, md_file)
-            pmcid = md_file.replace(".md", "")
-
-            with open(md_path, "r") as f:
-                content = f.read()
-
-            has_supplements = "## Supplementary Materials" in content
-
-            # Some articles contain an HTML-derived "Supplementary Materials" section
-            # that is not the BioC supplement text we add (often just a link/stub).
-            # Only skip when BioC-style content is already present (e.g., headings
-            # that look like supplementary PDF filenames).
-            has_bioc_supplements = bool(
-                re.search(r"^###\s+.*\.pdf\s*$", content, re.MULTILINE)
-            )
-
-            if has_supplements and has_bioc_supplements and not overwrite:
-                skipped += 1
-                continue
-
-            supplement = format_supplement_as_markdown(pmcid)
-            if not supplement:
-                continue
-
-            if has_supplements and overwrite:
-                # Remove old supplement section (everything from ## Supplementary Materials onward)
-                idx = content.index("## Supplementary Materials")
-                content = content[:idx].rstrip()
-
-            content = content.rstrip() + "\n\n" + supplement + "\n"
-
-            with open(md_path, "w") as f:
-                f.write(content)
-            added += 1
-
-        logger.info(f"Supplements added: {added}, skipped (already present): {skipped}")
-
 
 def clear_all_caches() -> None:
     """
     Remove all cached data created by this package.
 
     Currently clears:
-    - PMID->PMCID cache file located at `PMID_CACHE_DIR/PMID_CACHE_FILE` (defaults to `data/cache/pmid_to_pmcid.json`).
+    - PMID->PMCID cache file located at `PMID_CACHE_DIR/PMID_CACHE_FILE` (defaults to `~/.cache/pubmed-markdown/pmid_to_pmcid.json`).
     - Empties the `PMID_CACHE_DIR` folder if it exists and becomes empty.
     """
     try:
@@ -503,7 +454,7 @@ def convert_pmids_from_file(
     """
     converter = PubMedMarkdown(email=email)
     pmids = [line.strip() for line in open(file_path, "r").readlines() if line.strip()]
-    converter.pmids_to_markdown(pmids, save_dir, overwrite)
+    converter.pmids_to_markdown_files(pmids, save_dir, overwrite)
 
 
 def main():
@@ -529,11 +480,6 @@ def main():
         help="Clear all caches (PMID->PMCID cache) and exit",
     )
     parser.add_argument(
-        "--add_supplements",
-        action="store_true",
-        help="Add supplementary materials to existing markdown files",
-    )
-    parser.add_argument(
         "--email",
         type=str,
         default=None,
@@ -543,17 +489,12 @@ def main():
 
     if args.clear_caches:
         clear_all_caches()
-    elif args.add_supplements:
-        downloader = PubMedMarkdown(email=args.email)
-        downloader.add_supplements_to_existing(args.save_dir, args.overwrite)
     elif args.file_path:
         convert_pmids_from_file(
             args.file_path, args.save_dir, args.overwrite, email=args.email
         )
     else:
-        parser.error(
-            "--file_path is required (or use --clear_caches / --add_supplements)"
-        )
+        parser.error("--file_path is required (or use --clear_caches)")
 
 
 if __name__ == "__main__":

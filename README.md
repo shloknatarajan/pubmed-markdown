@@ -30,43 +30,42 @@ NCBI_EMAIL=your-email@institution.edu
 
 ### Python API
 
-**Single article (returns markdown string, no files created):**
+**Get markdown strings (single or batch, no files created):**
 
 ```python
 from pubmed_markdown import PubMedMarkdown
 
 downloader = PubMedMarkdown()
 
-# From PMID (resolves to PMCID automatically, falls back to abstract if not open access)
-markdown = downloader.single_pmid_to_markdown("12895196")
+# From PMID — accepts a single string or a list
+markdown = downloader.pmid_to_markdown("12895196")
+markdowns = downloader.pmid_to_markdown(["12895196", "17872605"])
 
-# From PMCID directly
-markdown = downloader.single_pmcid_to_markdown("PMC1884285")
+# From PMCID directly — also accepts a single string or a list
+markdown = downloader.pmcids_to_markdown("PMC1884285")
+markdowns = downloader.pmcids_to_markdown(["PMC1884285", "PMC6435416"])
 ```
 
-**Batch processing (saves HTML and markdown files to disk):**
+**Save markdown files to disk (single or batch):**
 
 ```python
 from pubmed_markdown import PubMedMarkdown
 
 downloader = PubMedMarkdown()
-pmids = ["12895196", "17872605", "25051018"]
-downloader.pmids_to_markdown(pmids, save_dir="data")
+downloader.pmids_to_markdown_files(["12895196", "17872605"], save_dir="data")
+
+# Also works with a single PMID
+downloader.pmids_to_markdown_files("25051018", save_dir="data")
 ```
 
 This creates:
 ```
 data/
 ├── html/          # Raw HTML from PMC
-├── markdown/      # Converted markdown files
-├── cache/         # PMID-to-PMCID mapping cache
-└── pmcids.txt     # Resolved PMCIDs
-```
+└── markdown/      # Converted markdown files
 
-**Add supplementary materials to existing markdown files:**
-
-```python
-downloader.add_supplements_to_existing(save_dir="data")
+~/.cache/pubmed-markdown/
+└── pmid_to_pmcid.json  # PMID-to-PMCID mapping cache
 ```
 
 **Individual utility functions:**
@@ -98,9 +97,6 @@ supplement = fetch_bioc_supplement("PMC6435416")
 # Convert PMIDs from a file (one PMID per line)
 pubmed-download --file_path=pmids.txt --save_dir=data
 
-# Add supplementary materials to existing markdown
-pubmed-download --add_supplements --save_dir=data
-
 # Clear all caches
 pubmed-download --clear_caches
 ```
@@ -109,27 +105,12 @@ pubmed-download --clear_caches
 
 | Method | Creates Files | Returns | Use Case |
 |--------|--------------|---------|----------|
-| `single_pmid_to_markdown()` | No | Markdown string | Single article, programmatic use |
-| `single_pmcid_to_markdown()` | No | Markdown string | Direct PMCID conversion |
-| `pmids_to_markdown()` | Yes | None | Batch processing, building datasets |
+| `pmid_to_markdown()` | No | Markdown string(s) | Single or batch, programmatic use |
+| `pmcids_to_markdown()` | No | Markdown string(s) | Direct PMCID conversion |
+| `pmids_to_markdown_files()` | Yes | None | Batch processing, building datasets |
 | `local_html_to_markdown()` | Yes | None | Re-convert existing HTML files |
-| `add_supplements_to_existing()` | Yes | None | Append supplements to existing markdown |
 
-## PharmGKB Integration
-
-Extract PMIDs from PharmGKB variant annotations for pharmacogenomics research:
-
-```python
-from pubmed_markdown.pharmgkb_annotations import get_pmid_list
-from pubmed_markdown import PubMedMarkdown
-
-# Download PharmGKB annotations and extract PMIDs
-pmids = get_pmid_list(save_dir="data")
-
-# Convert to markdown
-downloader = PubMedMarkdown()
-downloader.pmids_to_markdown([str(p) for p in pmids], save_dir="data")
-```
+All methods accepting IDs take either a single string or a list of strings.
 
 ## How It Works
 
