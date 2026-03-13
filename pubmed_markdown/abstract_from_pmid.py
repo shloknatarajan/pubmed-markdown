@@ -9,10 +9,7 @@ import os
 import requests
 import xml.etree.ElementTree as ET
 from typing import Optional
-from dotenv import load_dotenv
 from loguru import logger
-
-load_dotenv()
 
 
 def get_abstract_markdown_from_pmid(

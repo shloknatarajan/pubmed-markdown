@@ -3,15 +3,12 @@ from typing import List, Dict, Optional, Union
 import os
 import time
 from tqdm import tqdm
-from dotenv import load_dotenv
 from loguru import logger
-
-load_dotenv()
 
 
 def get_pmcid_from_pmid(
     pmids: Union[List[str], str],
-    email: str = os.getenv("NCBI_EMAIL"),
+    email: Optional[str] = None,
     batch_size: int = 200,
     delay: float = 0.4,
 ) -> Dict[str, Optional[str]]:
@@ -30,7 +27,10 @@ def get_pmcid_from_pmid(
     url = "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/"
     results = {}
 
-    if email is None or email == "":
+    if not email:
+        email = os.getenv("NCBI_EMAIL")
+
+    if not email:
         logger.warning(
             "No email provided. Please set the NCBI_EMAIL environment variable."
         )

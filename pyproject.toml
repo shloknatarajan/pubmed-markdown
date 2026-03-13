@@ -29,7 +29,6 @@ dependencies = [
     "loguru>=0.7.0",
     "tqdm>=4.67.0",
     "biopython>=1.85",
-    "python-dotenv>=1.0.0",
     "pandas>=2.0.0",
 ]
 

@@ -5,13 +5,10 @@ from .utils_bioc import format_supplement_as_markdown
 from .abstract_from_pmid import get_abstract_markdown_from_pmid
 from typing import List, Optional, Union
 import os
-from dotenv import load_dotenv
 from loguru import logger
 from tqdm import tqdm
 import argparse
 import time
-
-load_dotenv()
 
 
 class PubMedMarkdown:
