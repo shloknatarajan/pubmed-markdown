@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 authors = [
     { name = "Shlok Natarajan", email = "shlok.natarajan@gmail.com" },
 ]
-keywords = ["pubmed", "pmc", "markdown", "bioinformatics", "pharmacogenomics"]
+keywords = ["pubmed", "pmc", "markdown", "bioinformatics", "LLM", "text-mining"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
