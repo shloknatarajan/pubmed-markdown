@@ -52,17 +52,17 @@ def converter():
 
 
 # ---------------------------------------------------------------------------
-# pmcids_to_markdown (single + list)
+# pmcid_to_markdown (single + list)
 # ---------------------------------------------------------------------------
 
 
 @patch("pubmed_markdown.core.format_supplement_as_markdown")
 @patch("pubmed_markdown.core.get_html_from_pmcid")
-def test_pmcids_to_markdown_single(mock_html, mock_supp, converter):
+def test_pmcid_to_markdown_single(mock_html, mock_supp, converter):
     mock_html.return_value = SAMPLE_HTML
     mock_supp.return_value = None
 
-    md = converter.pmcids_to_markdown("PMC5555555")
+    md = converter.pmcid_to_markdown("PMC5555555")
     assert isinstance(md, str)
     assert "# Test Article" in md
     assert "## Abstract" in md
@@ -72,11 +72,11 @@ def test_pmcids_to_markdown_single(mock_html, mock_supp, converter):
 
 @patch("pubmed_markdown.core.format_supplement_as_markdown")
 @patch("pubmed_markdown.core.get_html_from_pmcid")
-def test_pmcids_to_markdown_list(mock_html, mock_supp, converter):
+def test_pmcid_to_markdown_list(mock_html, mock_supp, converter):
     mock_html.return_value = SAMPLE_HTML
     mock_supp.return_value = None
 
-    results = converter.pmcids_to_markdown(["PMC5555555", "PMC5555555"])
+    results = converter.pmcid_to_markdown(["PMC5555555", "PMC5555555"])
     assert isinstance(results, list)
     assert len(results) == 2
     assert all("# Test Article" in md for md in results)
@@ -84,40 +84,40 @@ def test_pmcids_to_markdown_list(mock_html, mock_supp, converter):
 
 @patch("pubmed_markdown.core.format_supplement_as_markdown")
 @patch("pubmed_markdown.core.get_html_from_pmcid")
-def test_pmcids_to_markdown_with_supplements(mock_html, mock_supp, converter):
+def test_pmcid_to_markdown_with_supplements(mock_html, mock_supp, converter):
     mock_html.return_value = SAMPLE_HTML
     mock_supp.return_value = "## Supplementary Materials\n\n### table.pdf\n\nSupp data."
 
-    md = converter.pmcids_to_markdown("PMC5555555", include_supplements=True)
+    md = converter.pmcid_to_markdown("PMC5555555", include_supplements=True)
     assert "## Supplementary Materials" in md
     assert "Supp data." in md
 
 
 @patch("pubmed_markdown.core.format_supplement_as_markdown")
 @patch("pubmed_markdown.core.get_html_from_pmcid")
-def test_pmcids_to_markdown_no_supplements_flag(mock_html, mock_supp, converter):
+def test_pmcid_to_markdown_no_supplements_flag(mock_html, mock_supp, converter):
     mock_html.return_value = SAMPLE_HTML
 
-    md = converter.pmcids_to_markdown("PMC5555555", include_supplements=False)
+    md = converter.pmcid_to_markdown("PMC5555555", include_supplements=False)
     assert md is not None
     mock_supp.assert_not_called()
 
 
 @patch("pubmed_markdown.core.get_html_from_pmcid")
-def test_pmcids_to_markdown_html_fetch_fails(mock_html, converter):
+def test_pmcid_to_markdown_html_fetch_fails(mock_html, converter):
     mock_html.return_value = None
-    md = converter.pmcids_to_markdown("PMC0000000")
+    md = converter.pmcid_to_markdown("PMC0000000")
     assert md is None
 
 
 @patch("pubmed_markdown.core.format_supplement_as_markdown")
 @patch("pubmed_markdown.core.get_html_from_pmcid")
-def test_pmcids_to_markdown_conversion_exception(mock_html, mock_supp, converter):
+def test_pmcid_to_markdown_conversion_exception(mock_html, mock_supp, converter):
     mock_html.return_value = "<invalid html that will crash somehow>"
     with patch.object(
         converter.html_to_markdown, "convert_html", side_effect=Exception("parse error")
     ):
-        md = converter.pmcids_to_markdown("PMC5555555")
+        md = converter.pmcid_to_markdown("PMC5555555")
         assert md is None
 
 

@@ -9,7 +9,6 @@ version = "0.1.0"
 update-records = "python -m pubmed_markdown.manage_records"
 convert-local-pmids = "python -m pubmed_markdown.core --file_path=data/pmids.txt"
 black = "python -m black ."
-clear-caches = "python -m pubmed_markdown.core --clear_caches"
 run-api = "uvicorn api:app --host 0.0.0.0 --port 8000 --reload"
 
 [dependencies]

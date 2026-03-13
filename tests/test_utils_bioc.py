@@ -2,7 +2,6 @@
 
 import json
 from unittest.mock import patch, MagicMock
-from pathlib import Path
 import pytest
 
 from pubmed_markdown.utils_bioc import (
@@ -86,86 +85,57 @@ def test_extract_text_malformed_input():
 
 
 @patch("pubmed_markdown.utils_bioc.requests.get")
-def test_fetch_supplement_success(mock_get, tmp_path, monkeypatch):
-    monkeypatch.setattr("pubmed_markdown.utils_bioc.CACHE_DIR", tmp_path)
-
+def test_fetch_supplement_success(mock_get):
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.text = json.dumps(SAMPLE_BIOC_JSON)
     mock_get.return_value = mock_resp
 
-    text = fetch_bioc_supplement("PMC1234", use_cache=False)
+    text = fetch_bioc_supplement("PMC1234")
     assert text is not None
     assert "Table S1" in text
 
 
 @patch("pubmed_markdown.utils_bioc.requests.get")
-def test_fetch_supplement_not_available(mock_get, tmp_path, monkeypatch):
-    monkeypatch.setattr("pubmed_markdown.utils_bioc.CACHE_DIR", tmp_path)
-
+def test_fetch_supplement_not_available(mock_get):
     mock_resp = MagicMock()
     mock_resp.status_code = 404
     mock_get.return_value = mock_resp
 
-    text = fetch_bioc_supplement("PMC0000", use_cache=False)
+    text = fetch_bioc_supplement("PMC0000")
     assert text is None
 
 
 @patch("pubmed_markdown.utils_bioc.requests.get")
-def test_fetch_supplement_empty_response(mock_get, tmp_path, monkeypatch):
-    monkeypatch.setattr("pubmed_markdown.utils_bioc.CACHE_DIR", tmp_path)
-
+def test_fetch_supplement_empty_response(mock_get):
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.text = ""
     mock_get.return_value = mock_resp
 
-    text = fetch_bioc_supplement("PMC0000", use_cache=False)
+    text = fetch_bioc_supplement("PMC0000")
     assert text is None
 
 
 @patch("pubmed_markdown.utils_bioc.requests.get")
-def test_fetch_supplement_html_response(mock_get, tmp_path, monkeypatch):
+def test_fetch_supplement_html_response(mock_get):
     """API returns HTML when no supplements — should handle gracefully."""
-    monkeypatch.setattr("pubmed_markdown.utils_bioc.CACHE_DIR", tmp_path)
-
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.text = "<html><body>No supplements</body></html>"
     mock_get.return_value = mock_resp
 
-    text = fetch_bioc_supplement("PMC0000", use_cache=False)
+    text = fetch_bioc_supplement("PMC0000")
     assert text is None
 
 
 @patch("pubmed_markdown.utils_bioc.requests.get")
-def test_fetch_supplement_caching(mock_get, tmp_path, monkeypatch):
-    monkeypatch.setattr("pubmed_markdown.utils_bioc.CACHE_DIR", tmp_path)
-
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.text = json.dumps(SAMPLE_BIOC_JSON)
-    mock_get.return_value = mock_resp
-
-    # First call — fetches from API
-    text1 = fetch_bioc_supplement("PMC1234", use_cache=True)
-    assert text1 is not None
-    assert mock_get.call_count == 1
-
-    # Second call — should use cache
-    text2 = fetch_bioc_supplement("PMC1234", use_cache=True)
-    assert text2 == text1
-    assert mock_get.call_count == 1  # No additional API call
-
-
-@patch("pubmed_markdown.utils_bioc.requests.get")
-def test_fetch_supplement_network_error(mock_get, tmp_path, monkeypatch):
-    monkeypatch.setattr("pubmed_markdown.utils_bioc.CACHE_DIR", tmp_path)
+def test_fetch_supplement_network_error(mock_get):
     import requests
 
     mock_get.side_effect = requests.exceptions.ConnectionError("fail")
 
-    text = fetch_bioc_supplement("PMC1234", use_cache=False)
+    text = fetch_bioc_supplement("PMC1234")
     assert text is None
 
 
@@ -175,15 +145,13 @@ def test_fetch_supplement_network_error(mock_get, tmp_path, monkeypatch):
 
 
 @patch("pubmed_markdown.utils_bioc.requests.get")
-def test_format_supplement_markdown(mock_get, tmp_path, monkeypatch):
-    monkeypatch.setattr("pubmed_markdown.utils_bioc.CACHE_DIR", tmp_path)
-
+def test_format_supplement_markdown(mock_get):
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.text = json.dumps(SAMPLE_BIOC_JSON)
     mock_get.return_value = mock_resp
 
-    md = format_supplement_as_markdown("PMC1234", use_cache=False)
+    md = format_supplement_as_markdown("PMC1234")
     assert md is not None
     assert "## Supplementary Materials" in md
     assert "### supplement_table1.pdf" in md
@@ -193,12 +161,10 @@ def test_format_supplement_markdown(mock_get, tmp_path, monkeypatch):
 
 
 @patch("pubmed_markdown.utils_bioc.requests.get")
-def test_format_supplement_none_when_unavailable(mock_get, tmp_path, monkeypatch):
-    monkeypatch.setattr("pubmed_markdown.utils_bioc.CACHE_DIR", tmp_path)
-
+def test_format_supplement_none_when_unavailable(mock_get):
     mock_resp = MagicMock()
     mock_resp.status_code = 404
     mock_get.return_value = mock_resp
 
-    md = format_supplement_as_markdown("PMC0000", use_cache=False)
+    md = format_supplement_as_markdown("PMC0000")
     assert md is None

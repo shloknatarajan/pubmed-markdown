@@ -42,8 +42,8 @@ markdown = downloader.pmid_to_markdown("12895196")
 markdowns = downloader.pmid_to_markdown(["12895196", "17872605"])
 
 # From PMCID directly — also accepts a single string or a list
-markdown = downloader.pmcids_to_markdown("PMC1884285")
-markdowns = downloader.pmcids_to_markdown(["PMC1884285", "PMC6435416"])
+markdown = downloader.pmcid_to_markdown("PMC1884285")
+markdowns = downloader.pmcid_to_markdown(["PMC1884285", "PMC6435416"])
 ```
 
 **Save markdown files to disk (single or batch):**
@@ -63,9 +63,6 @@ This creates:
 data/
 ├── html/          # Raw HTML from PMC
 └── markdown/      # Converted markdown files
-
-~/.cache/pubmed-markdown/
-└── pmid_to_pmcid.json  # PMID-to-PMCID mapping cache
 ```
 
 **Individual utility functions:**
@@ -96,9 +93,6 @@ supplement = fetch_bioc_supplement("PMC6435416")
 ```bash
 # Convert PMIDs from a file (one PMID per line)
 pubmed-download --file_path=pmids.txt --save_dir=data
-
-# Clear all caches
-pubmed-download --clear_caches
 ```
 
 ### API Reference
@@ -106,7 +100,7 @@ pubmed-download --clear_caches
 | Method | Creates Files | Returns | Use Case |
 |--------|--------------|---------|----------|
 | `pmid_to_markdown()` | No | Markdown string(s) | Single or batch, programmatic use |
-| `pmcids_to_markdown()` | No | Markdown string(s) | Direct PMCID conversion |
+| `pmcid_to_markdown()` | No | Markdown string(s) | Direct PMCID conversion |
 | `pmids_to_markdown_files()` | Yes | None | Batch processing, building datasets |
 | `local_html_to_markdown()` | Yes | None | Re-convert existing HTML files |
 
@@ -114,7 +108,7 @@ All methods accepting IDs take either a single string or a list of strings.
 
 ## How It Works
 
-1. **PMID to PMCID** -- Uses NCBI's ID Converter API with batching, caching (30-day expiry), and rate limiting
+1. **PMID to PMCID** -- Uses NCBI's ID Converter API with batching and rate limiting
 2. **HTML extraction** -- Fetches full article HTML from PubMed Central
 3. **Markdown conversion** -- Converts HTML to structured markdown preserving tables, figures, citations, and references
 4. **Supplementary materials** -- Fetches pre-processed supplement text via NCBI's BioC API
@@ -125,8 +119,6 @@ All methods accepting IDs take either a single string or a list of strings.
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `NCBI_EMAIL` | None | Email for NCBI API identification |
-| `PMID_CACHE_DIR` | `data/cache` | Cache directory path |
-| `PMID_CACHE_FILE` | `pmid_to_pmcid.json` | Cache filename |
 
 ## License
 

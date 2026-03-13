@@ -45,10 +45,10 @@ if markdown:
 # 2. Convert a single article by PMCID
 # ---------------------------------------------------------------------------
 # If you already have a PMCID, you can skip PMID resolution entirely.
-# Both pmcids_to_markdown and pmid_to_markdown accept a single string
+# Both pmcid_to_markdown and pmid_to_markdown accept a single string
 # or a list of strings.
 
-markdown = downloader.pmcids_to_markdown("PMC1884285", include_supplements=True)
+markdown = downloader.pmcid_to_markdown("PMC1884285", include_supplements=True)
 if markdown:
     print("=== Single article (by PMCID, with supplements) ===")
     print(markdown[:500])
@@ -111,7 +111,5 @@ if supplement:
 #   # Convert PMIDs listed in a file (one per line)
 #   pubmed-download --file_path=pmids.txt --save_dir=data
 #
-#   # Clear all caches
-#   pubmed-download --clear_caches
 
 print("Tutorial complete!")

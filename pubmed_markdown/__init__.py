@@ -5,7 +5,6 @@ from .core import PubMedMarkdown
 from .utils_bioc import (
     fetch_bioc_supplement,
     format_supplement_as_markdown,
-    prefetch_bioc_supplements,
 )
 from .abstract_from_pmid import get_abstract_markdown_from_pmid
 
@@ -18,6 +17,5 @@ __all__ = [
     "get_scraped_pmids",
     "fetch_bioc_supplement",
     "format_supplement_as_markdown",
-    "prefetch_bioc_supplements",
     "get_abstract_markdown_from_pmid",
 ]

@@ -9,8 +9,6 @@ from dotenv import load_dotenv
 from loguru import logger
 from tqdm import tqdm
 import argparse
-from pathlib import Path
-import shutil
 import time
 
 load_dotenv()
@@ -56,7 +54,7 @@ class PubMedMarkdown:
 
         return markdown
 
-    def pmcids_to_markdown(
+    def pmcid_to_markdown(
         self,
         pmcids: Union[str, List[str]],
         include_supplements: bool = True,
@@ -385,61 +383,6 @@ class PubMedMarkdown:
                 time.sleep(0.4)
 
 
-def clear_all_caches() -> None:
-    """
-    Remove all cached data created by this package.
-
-    Currently clears:
-    - PMID->PMCID cache file located at `PMID_CACHE_DIR/PMID_CACHE_FILE` (defaults to `~/.cache/pubmed-markdown/pmid_to_pmcid.json`).
-    - Empties the `PMID_CACHE_DIR` folder if it exists and becomes empty.
-    """
-    try:
-        # Import locally to avoid circular import at module load
-        from .pmcid_from_pmid import _get_cache_file_path  # type: ignore
-
-        cache_file: Path = _get_cache_file_path()
-        cache_dir: Path = cache_file.parent
-
-        # Remove the cache file if it exists
-        if cache_file.exists():
-            try:
-                cache_file.unlink()
-                logger.info(f"Removed cache file: {cache_file}")
-            except Exception as e:
-                logger.warning(f"Failed to remove cache file {cache_file}: {e}")
-
-        # If the cache directory exists, remove it if empty; otherwise, offer to clear contents
-        if cache_dir.exists():
-            # Attempt to remove directory if empty
-            try:
-                cache_dir.rmdir()
-                logger.info(f"Removed empty cache directory: {cache_dir}")
-            except OSError:
-                # Directory not empty; remove its contents
-                removed_any = False
-                for child in cache_dir.iterdir():
-                    try:
-                        if child.is_dir():
-                            shutil.rmtree(child)
-                        else:
-                            child.unlink()
-                        removed_any = True
-                        logger.info(f"Removed cached item: {child}")
-                    except Exception as e:
-                        logger.warning(f"Failed to remove cached item {child}: {e}")
-                if removed_any:
-                    # Try removing directory again after clearing contents
-                    try:
-                        cache_dir.rmdir()
-                        logger.info(f"Removed cache directory: {cache_dir}")
-                    except Exception:
-                        # It's okay if it still exists; leave it
-                        pass
-        logger.info("All caches cleared.")
-    except Exception as e:
-        logger.error(f"Error while clearing caches: {e}")
-
-
 def convert_pmids_from_file(
     file_path: str,
     save_dir: str = "data",
@@ -479,11 +422,6 @@ def main():
         help="Whether to overwrite existing markdown files (default: False)",
     )
     parser.add_argument(
-        "--clear_caches",
-        action="store_true",
-        help="Clear all caches (PMID->PMCID cache) and exit",
-    )
-    parser.add_argument(
         "--email",
         type=str,
         default=None,
@@ -491,14 +429,12 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.clear_caches:
-        clear_all_caches()
-    elif args.file_path:
+    if args.file_path:
         convert_pmids_from_file(
             args.file_path, args.save_dir, args.overwrite, email=args.email
         )
     else:
-        parser.error("--file_path is required (or use --clear_caches)")
+        parser.error("--file_path is required")
 
 
 if __name__ == "__main__":
