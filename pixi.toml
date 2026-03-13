@@ -1,4 +1,4 @@
-[project]
+[workspace]
 authors = ["Shlok Natarajan <shlok.natarajan@gmail.com>"]
 channels = ["conda-forge"]
 name = "pmid-article-resolver"
@@ -11,6 +11,9 @@ convert-local-pmids = "python -m pubmed_markdown.core --file_path=data/pmids.txt
 black = "python -m black ."
 run-api = "uvicorn api:app --host 0.0.0.0 --port 8000 --reload"
 test = "python -m pytest tests/"
+clean = "rm -rf dist/"
+build = { cmd = "python -m build", depends-on = ["clean"] }
+publish = { cmd = "python -m twine upload dist/*", depends-on = ["build"] }
 
 [dependencies]
 python-dotenv = ">=1.1.0,<2"
@@ -22,6 +25,8 @@ biopython = ">=1.85,<2"
 beautifulsoup4 = ">=4.13.4,<5"
 black = ">=25.1.0,<26"
 pytest = ">=8,<9"
+twine = ">=6,<7"
+python-build = ">=1,<2"
 fastapi = ">=0.115,<1"
 uvicorn = ">=0.34,<1"
 slowapi = ">=0.1.9,<1"

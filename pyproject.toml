@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pubmed-markdown"
-version = "0.2.3"
+version = "0.2.4"
 description = "Convert PubMed articles (PMIDs or PMCIDs) to clean, structured markdown with full text, abstracts, and supplementary materials"
 readme = "README.md"
 license = "MIT"
@@ -39,6 +39,9 @@ Issues = "https://github.com/shloknatarajan/PubMedDownloader/issues"
 
 [project.scripts]
 pubmed-download = "pubmed_markdown.core:main"
+
+[tool.hatch.build]
+exclude = [".claude/", ".env", ".vscode/"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["pubmed_markdown"]

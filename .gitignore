@@ -23,3 +23,6 @@ data/*
 
 # cursor
 .cursor
+
+# claude code
+.claude/
