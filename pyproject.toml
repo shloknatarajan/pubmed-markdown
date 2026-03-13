@@ -39,7 +39,7 @@ Repository = "https://github.com/shloknatarajan/PubMedDownloader"
 Issues = "https://github.com/shloknatarajan/PubMedDownloader/issues"
 
 [project.scripts]
-pubmed-download = "pubmed_downloader.pubmed_downloader:main"
+pubmed-download = "pubmed_markdown.core:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["pubmed_downloader"]
+packages = ["pubmed_markdown"]

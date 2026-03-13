@@ -17,7 +17,7 @@ import time
 load_dotenv()
 
 
-class PubMedDownloader:
+class PubMedMarkdown:
     """
     Args:
         save_dir (str): Directory to save the files to (default: "data/")
@@ -31,7 +31,7 @@ class PubMedDownloader:
         if not self.email:
             logger.warning(
                 "No NCBI email configured. Set NCBI_EMAIL environment variable "
-                "or pass email to PubMedDownloader(). NCBI may block requests (403)."
+                "or pass email to PubMedMarkdown(). NCBI may block requests (403)."
             )
 
     def single_pmcid_to_markdown(
@@ -501,7 +501,7 @@ def convert_pmids_from_file(
         overwrite (bool): Whether to overwrite existing markdown files (default: False)
         email (str, optional): Email for NCBI API identification.
     """
-    converter = PubMedDownloader(email=email)
+    converter = PubMedMarkdown(email=email)
     pmids = [line.strip() for line in open(file_path, "r").readlines() if line.strip()]
     converter.pmids_to_markdown(pmids, save_dir, overwrite)
 
@@ -544,7 +544,7 @@ def main():
     if args.clear_caches:
         clear_all_caches()
     elif args.add_supplements:
-        downloader = PubMedDownloader(email=args.email)
+        downloader = PubMedMarkdown(email=args.email)
         downloader.add_supplements_to_existing(args.save_dir, args.overwrite)
     elif args.file_path:
         convert_pmids_from_file(

@@ -18,7 +18,7 @@ from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from pubmed_downloader import PubMedDownloader
+from pubmed_markdown import PubMedMarkdown
 
 # ---------------------------------------------------------------------------
 # Rate limiting
@@ -127,7 +127,7 @@ class JobStatus(BaseModel):
 # ---------------------------------------------------------------------------
 # Shared converter instance
 # ---------------------------------------------------------------------------
-_converter = PubMedDownloader()
+_converter = PubMedMarkdown()
 
 
 # ---------------------------------------------------------------------------
@@ -135,9 +135,9 @@ _converter = PubMedDownloader()
 # ---------------------------------------------------------------------------
 async def _convert_pmid(pmid: str, include_supplements: bool = True) -> ConvertResult:
     """Run the PMID→markdown pipeline in a thread (it does blocking I/O)."""
-    from pubmed_downloader.pmcid_from_pmid import get_pmcid_from_pmid
-    from pubmed_downloader.html_from_pmcid import get_html_from_pmcid
-    from pubmed_downloader.utils_bioc import format_supplement_as_markdown
+    from pubmed_markdown.pmcid_from_pmid import get_pmcid_from_pmid
+    from pubmed_markdown.html_from_pmcid import get_html_from_pmcid
+    from pubmed_markdown.utils_bioc import format_supplement_as_markdown
 
     loop = asyncio.get_event_loop()
 
@@ -194,8 +194,8 @@ async def _convert_pmid(pmid: str, include_supplements: bool = True) -> ConvertR
 
 async def _convert_pmcid(pmcid: str, include_supplements: bool = True) -> ConvertResult:
     """Run the PMCID→markdown pipeline in a thread (it does blocking I/O)."""
-    from pubmed_downloader.html_from_pmcid import get_html_from_pmcid
-    from pubmed_downloader.utils_bioc import format_supplement_as_markdown
+    from pubmed_markdown.html_from_pmcid import get_html_from_pmcid
+    from pubmed_markdown.utils_bioc import format_supplement_as_markdown
 
     loop = asyncio.get_event_loop()
 

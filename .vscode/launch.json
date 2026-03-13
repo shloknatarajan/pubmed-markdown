@@ -43,7 +43,7 @@
             "type": "debugpy",
             "request": "launch",
             "cwd": "${workspaceFolder}",
-            "module": "src.pubmed_downloader",
+            "module": "pubmed_markdown.core",
         }
     ]
 }

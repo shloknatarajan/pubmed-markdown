@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY pubmed_downloader/ pubmed_downloader/
+COPY pubmed_markdown/ pubmed_markdown/
 COPY api.py .
 
 EXPOSE 8000

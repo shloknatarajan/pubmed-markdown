@@ -33,9 +33,9 @@ NCBI_EMAIL=your-email@institution.edu
 **Single article (returns markdown string, no files created):**
 
 ```python
-from pubmed_downloader import PubMedDownloader
+from pubmed_markdown import PubMedMarkdown
 
-downloader = PubMedDownloader()
+downloader = PubMedMarkdown()
 
 # From PMID (resolves to PMCID automatically, falls back to abstract if not open access)
 markdown = downloader.single_pmid_to_markdown("12895196")
@@ -47,9 +47,9 @@ markdown = downloader.single_pmcid_to_markdown("PMC1884285")
 **Batch processing (saves HTML and markdown files to disk):**
 
 ```python
-from pubmed_downloader import PubMedDownloader
+from pubmed_markdown import PubMedMarkdown
 
-downloader = PubMedDownloader()
+downloader = PubMedMarkdown()
 pmids = ["12895196", "17872605", "25051018"]
 downloader.pmids_to_markdown(pmids, save_dir="data")
 ```
@@ -72,7 +72,7 @@ downloader.add_supplements_to_existing(save_dir="data")
 **Individual utility functions:**
 
 ```python
-from pubmed_downloader import (
+from pubmed_markdown import (
     get_pmcid_from_pmid,
     get_html_from_pmcid,
     get_abstract_markdown_from_pmid,
@@ -120,14 +120,14 @@ pubmed-download --clear_caches
 Extract PMIDs from PharmGKB variant annotations for pharmacogenomics research:
 
 ```python
-from pubmed_downloader.pharmgkb_annotations import get_pmid_list
-from pubmed_downloader import PubMedDownloader
+from pubmed_markdown.pharmgkb_annotations import get_pmid_list
+from pubmed_markdown import PubMedMarkdown
 
 # Download PharmGKB annotations and extract PMIDs
 pmids = get_pmid_list(save_dir="data")
 
 # Convert to markdown
-downloader = PubMedDownloader()
+downloader = PubMedMarkdown()
 downloader.pmids_to_markdown([str(p) for p in pmids], save_dir="data")
 ```
 

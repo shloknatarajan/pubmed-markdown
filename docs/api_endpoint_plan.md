@@ -2,7 +2,7 @@
 
 ## Goal
 
-Expose the PubMedDownloader pipeline as a publicly available HTTP API with two core endpoints:
+Expose the PubMedMarkdown pipeline as a publicly available HTTP API with two core endpoints:
 
 - **PMID → Markdown** (resolves PMID → PMCID → HTML → markdown)
 - **PMCID → Markdown** (skips PMID resolution, goes directly HTML → markdown)
@@ -15,7 +15,7 @@ This is important because not every PMID maps to a freely available PMC article.
 
 ### 1.1 Add a `single_pmcid_to_markdown` method
 
-The existing `PubMedDownloader` has `single_pmid_to_markdown` but no equivalent that accepts a PMCID directly. Add:
+The existing `PubMedMarkdown` has `single_pmid_to_markdown` but no equivalent that accepts a PMCID directly. Add:
 
 ```python
 def single_pmcid_to_markdown(self, pmcid: str) -> Optional[str]:

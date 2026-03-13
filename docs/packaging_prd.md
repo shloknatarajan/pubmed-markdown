@@ -2,19 +2,19 @@
 
 ## Overview
 
-This document outlines the requirements and implementation plan for converting the PMid Article Resolver project into a distributable Python package. The goal is to enable users to install and use the `PubMedDownloader` class and related functionality via pip installation.
+This document outlines the requirements and implementation plan for converting the PMid Article Resolver project into a distributable Python package. The goal is to enable users to install and use the `PubMedMarkdown` class and related functionality via pip installation.
 
 ## Objectives
 
 1. **Pip Package**: Create a distributable package that users can install via `pip install pubmed-downloader`
-2. **Importable Module**: Enable clean imports like `from pubmed-downloader import PubMedDownloader`
+2. **Importable Module**: Enable clean imports like `from pubmed-downloader import PubMedMarkdown`
 3. **Maintain Current Functionality**: Preserve all existing CLI and API functionality
 
 ## Current State Analysis
 
 ### Strengths
 - Well-structured modular code in `src/` directory
-- Clear class-based architecture with `PubMedDownloader` as main entry point
+- Clear class-based architecture with `PubMedMarkdown` as main entry point
 - Comprehensive documentation and examples
 - Proper dependency management via `pixi.toml`
 
@@ -106,7 +106,7 @@ dev = ["black>=25.1.0", "pytest>=7.0.0"]
 ```python
 """PMid Article Resolver - Convert PubMed articles to markdown format."""
 
-from .downloader import PubMedDownloader
+from .downloader import PubMedMarkdown
 from .pmcid_resolver import get_pmcid_from_pmid
 from .html_extractor import get_html_from_pmcid
 from .markdown_converter import PubMedHTMLToMarkdownConverter
@@ -114,7 +114,7 @@ from .record_manager import get_scraped_pmids, create_records
 
 __version__ = "0.1.0"
 __all__ = [
-    "PubMedDownloader",
+    "PubMedMarkdown",
     "get_pmcid_from_pmid", 
     "get_html_from_pmcid",
     "PubMedHTMLToMarkdownConverter",
@@ -184,7 +184,7 @@ if __name__ == "__main__":
 3. **Test local installation** (1 hour)
    - Build package: `python -m build`
    - Install locally: `pip install -e .`
-   - Verify imports work: `from pmid_article_resolver import PubMedDownloader`
+   - Verify imports work: `from pmid_article_resolver import PubMedMarkdown`
 
 ### Phase 2: Full Distribution (Extended)
 **Goal**: Publish to PyPI and add advanced features
@@ -213,10 +213,10 @@ pip install pmid-article-resolver
 
 ### Python API Usage
 ```python
-from pmid_article_resolver import PubMedDownloader
+from pmid_article_resolver import PubMedMarkdown
 
 # Initialize downloader
-downloader = PubMedDownloader()
+downloader = PubMedMarkdown()
 
 # Convert single PMID to markdown (in-memory)
 markdown = downloader.single_pmid_to_markdown("12895196")
@@ -255,7 +255,7 @@ pmid-resolver update-records --dir data/
 
 ### Minimum Viable Package (MVP)
 - ✅ Users can install via `pip install pmid-article-resolver`
-- ✅ Basic import works: `from pmid_article_resolver import PubMedDownloader`
+- ✅ Basic import works: `from pmid_article_resolver import PubMedMarkdown`
 - ✅ Core functionality preserved
 - ✅ Existing pixi workflow still functional
 
