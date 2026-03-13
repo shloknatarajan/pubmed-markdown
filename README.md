@@ -12,18 +12,31 @@ Articles without open-access full text automatically fall back to abstract-only 
 pip install pubmed-markdown
 ```
 
+Requires Python 3.11+.
+
 ## Setup
 
-Set your email for NCBI API identification (optional but recommended):
+Set your email for NCBI API identification (required to avoid 403 errors):
 
 ```bash
 export NCBI_EMAIL=your-email@institution.edu
 ```
 
-Or create a `.env` file in your working directory:
+Or pass it directly:
 
-```env
-NCBI_EMAIL=your-email@institution.edu
+```python
+downloader = PubMedMarkdown(email="your-email@institution.edu")
+```
+
+## Quick Start
+
+```python
+from pubmed_markdown import PubMedMarkdown
+
+downloader = PubMedMarkdown()
+
+# Get markdown string from a PMID
+markdown = downloader.pmid_to_markdown("12895196")
 ```
 
 ## Usage
@@ -44,6 +57,9 @@ markdowns = downloader.pmid_to_markdown(["12895196", "17872605"])
 # From PMCID directly — also accepts a single string or a list
 markdown = downloader.pmcid_to_markdown("PMC1884285")
 markdowns = downloader.pmcid_to_markdown(["PMC1884285", "PMC6435416"])
+
+# Skip supplementary materials
+markdown = downloader.pmid_to_markdown("12895196", include_supplements=False)
 ```
 
 **Save markdown files to disk (single or batch):**
@@ -56,6 +72,9 @@ downloader.pmids_to_markdown_files(["12895196", "17872605"], save_dir="data")
 
 # Also works with a single PMID
 downloader.pmids_to_markdown_files("25051018", save_dir="data")
+
+# Overwrite existing files
+downloader.pmids_to_markdown_files(["12895196"], save_dir="data", overwrite=True)
 ```
 
 This creates:
@@ -65,6 +84,8 @@ data/
 └── markdown/      # Converted markdown files
 ```
 
+Full-text articles are saved as `{PMCID}.md`. Articles without open-access full text are saved as `PMID{PMID}.md` with abstract only.
+
 **Individual utility functions:**
 
 ```python
@@ -73,9 +94,10 @@ from pubmed_markdown import (
     get_html_from_pmcid,
     get_abstract_markdown_from_pmid,
     fetch_bioc_supplement,
+    format_supplement_as_markdown,
 )
 
-# Resolve PMIDs to PMCIDs
+# Resolve PMIDs to PMCIDs (returns dict mapping PMID -> PMCID or None)
 mapping = get_pmcid_from_pmid(["12895196", "17872605"])
 
 # Fetch raw HTML from PMC
@@ -84,8 +106,11 @@ html = get_html_from_pmcid("PMC1884285")
 # Get abstract for non-open-access articles
 abstract_md = get_abstract_markdown_from_pmid("12345678")
 
-# Get supplementary material text
+# Get raw supplementary material text
 supplement = fetch_bioc_supplement("PMC6435416")
+
+# Get supplementary materials formatted as a markdown section
+supplement_md = format_supplement_as_markdown("PMC6435416")
 ```
 
 ### Command Line
@@ -93,6 +118,12 @@ supplement = fetch_bioc_supplement("PMC6435416")
 ```bash
 # Convert PMIDs from a file (one PMID per line)
 pubmed-download --file_path=pmids.txt --save_dir=data
+
+# Overwrite existing files
+pubmed-download --file_path=pmids.txt --save_dir=data --overwrite
+
+# Specify email directly
+pubmed-download --file_path=pmids.txt --email=your-email@institution.edu
 ```
 
 ### API Reference
@@ -102,6 +133,8 @@ pubmed-download --file_path=pmids.txt --save_dir=data
 | `pmid_to_markdown()` | No | Markdown string(s) | Single or batch, programmatic use |
 | `pmcid_to_markdown()` | No | Markdown string(s) | Direct PMCID conversion |
 | `pmids_to_markdown_files()` | Yes | None | Batch processing, building datasets |
+| `pmids_to_pmcids()` | No | List of PMCIDs | PMID to PMCID resolution |
+| `pmcids_to_html()` | Yes | None | Fetch and save raw HTML |
 | `local_html_to_markdown()` | Yes | None | Re-convert existing HTML files |
 
 All methods accepting IDs take either a single string or a list of strings.

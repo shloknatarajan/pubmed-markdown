@@ -32,7 +32,7 @@ class PubMedMarkdown:
         self, pmcid: str, include_supplements: bool = True
     ) -> Optional[str]:
         """Convert a single PMCID to markdown. Internal helper."""
-        html = get_html_from_pmcid(pmcid)
+        html = get_html_from_pmcid(pmcid, email=self.email)
         if html is None:
             return None
 
@@ -277,7 +277,7 @@ class PubMedMarkdown:
 
         # Convert to HTML
         for pmcid in tqdm(pmcids, desc="Converting PMCIDs to HTML"):
-            html_text = get_html_from_pmcid(pmcid)
+            html_text = get_html_from_pmcid(pmcid, email=self.email)
             if html_text is None:
                 logger.error(f"No HTML found for PMCID {pmcid}")
                 continue

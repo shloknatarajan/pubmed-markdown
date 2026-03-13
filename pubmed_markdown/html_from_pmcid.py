@@ -3,12 +3,15 @@ PMCID --> Full Article Text (HTML)
 This uses a standard get request with a user agent and accept header to fetch the article text.
 """
 
+import os
+from importlib.metadata import version
+
 import requests
 from loguru import logger
 from typing import Optional
 
 
-def get_html_from_pmcid(pmcid: str) -> Optional[str]:
+def get_html_from_pmcid(pmcid: str, email: Optional[str] = None) -> Optional[str]:
     """
     Given a PMCID, fetch the full article text from the NCBI website.
     Returns the HTML text of the article in string format from the url
@@ -16,6 +19,7 @@ def get_html_from_pmcid(pmcid: str) -> Optional[str]:
 
     Args:
         pmcid (str): The PMCID to fetch
+        email (str, optional): Email for NCBI identification. Falls back to NCBI_EMAIL env var.
 
     Returns:
         Optional[str]: The article html text if successful, None if there was an error
@@ -24,8 +28,18 @@ def get_html_from_pmcid(pmcid: str) -> Optional[str]:
         logger.error("pmcid must be a string")
         return None
 
+    contact_email = email or os.getenv("NCBI_EMAIL", "")
+    try:
+        pkg_version = version("pubmed-markdown")
+    except Exception:
+        pkg_version = "0.0.0"
+
+    user_agent = f"pubmed-markdown/{pkg_version}"
+    if contact_email:
+        user_agent += f" (mailto:{contact_email})"
+
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "User-Agent": user_agent,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
     url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/?report=classic"
