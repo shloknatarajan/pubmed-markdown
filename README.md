@@ -152,6 +152,7 @@ All methods accepting IDs take either a single string or a list of strings.
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `NCBI_EMAIL` | None | Email for NCBI API identification |
+| `NCBI_API_KEY` | None | Optional NCBI API key (increases E-utilities rate limit from 3 to 10 req/s) |
 
 ## License
 

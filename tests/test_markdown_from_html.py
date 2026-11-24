@@ -62,6 +62,22 @@ def test_metadata_url(converter):
     assert "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9999999/" in md
 
 
+def test_metadata_omits_empty_pmcid_and_broken_url(converter):
+    html = "<html><head><title>No PMCID - PMC</title></head><body></body></html>"
+    md = converter.convert_html(html)
+    assert "**PMCID:**" not in md
+    assert "/pmc/articles//" not in md
+
+
+def test_waf_captcha_html_raises_value_error(converter):
+    waf_html = (
+        "<html><head><title>Checking your browser - reCAPTCHA</title></head>"
+        "<body>Challenge page</body></html>"
+    )
+    with pytest.raises(ValueError, match="WAF/CAPTCHA"):
+        converter.convert_html(waf_html)
+
+
 # ---------------------------------------------------------------------------
 # Abstract extraction
 # ---------------------------------------------------------------------------

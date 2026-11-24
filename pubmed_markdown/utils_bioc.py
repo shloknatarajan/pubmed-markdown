@@ -13,15 +13,23 @@ import json
 import requests
 from loguru import logger
 
+from .http_utils import DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT, get_with_retries
+
 BIOC_BASE_URL = "https://www.ncbi.nlm.nih.gov/research/bionlp/RESTful/supplmat.cgi"
 
 
-def fetch_bioc_supplement(pmcid: str) -> str | None:
+def fetch_bioc_supplement(
+    pmcid: str,
+    timeout: float = DEFAULT_TIMEOUT,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+) -> str | None:
     """
     Fetch supplementary material text from the BioC API.
 
     Args:
         pmcid: PubMed Central ID (e.g., "PMC6435416")
+        timeout: HTTP request timeout in seconds (default: 30.0)
+        max_retries: Number of retry attempts for transient errors (default: 2)
 
     Returns:
         Extracted text from all supplementary materials, or None if not available.
@@ -29,7 +37,13 @@ def fetch_bioc_supplement(pmcid: str) -> str | None:
     url = f"{BIOC_BASE_URL}/BioC_JSON/{pmcid}/All"
 
     try:
-        response = requests.get(url, timeout=30)
+        response = get_with_retries(
+            url,
+            request_fn=requests.get,
+            timeout=timeout,
+            max_retries=max_retries,
+            context=f"BioC supplement {pmcid}",
+        )
 
         if response.status_code != 200:
             logger.debug(
@@ -124,12 +138,18 @@ def _extract_text_from_bioc(data: list | dict) -> str:
     return "\n\n".join(doc["text"] for doc in docs)
 
 
-def format_supplement_as_markdown(pmcid: str) -> str | None:
+def format_supplement_as_markdown(
+    pmcid: str,
+    timeout: float = DEFAULT_TIMEOUT,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+) -> str | None:
     """
     Fetch supplementary material for a PMCID and format it as a markdown section.
 
     Args:
         pmcid: PubMed Central ID (e.g., "PMC6435416")
+        timeout: HTTP request timeout in seconds (default: 30.0)
+        max_retries: Number of retry attempts for transient errors (default: 2)
 
     Returns:
         A formatted markdown string with ## Supplementary Materials header,
@@ -138,7 +158,13 @@ def format_supplement_as_markdown(pmcid: str) -> str | None:
     url = f"{BIOC_BASE_URL}/BioC_JSON/{pmcid}/All"
 
     try:
-        response = requests.get(url, timeout=30)
+        response = get_with_retries(
+            url,
+            request_fn=requests.get,
+            timeout=timeout,
+            max_retries=max_retries,
+            context=f"BioC supplement {pmcid}",
+        )
         if response.status_code != 200:
             return None
         content = response.text

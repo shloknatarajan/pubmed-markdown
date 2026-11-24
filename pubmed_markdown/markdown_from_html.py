@@ -13,6 +13,8 @@ from typing import Dict
 from bs4 import BeautifulSoup, Tag, NavigableString
 from loguru import logger
 
+from .http_utils import is_waf_or_captcha_html
+
 
 class PubMedHTMLToMarkdownConverter:
     """Converts PubMed/PMC HTML articles to markdown format."""
@@ -42,7 +44,14 @@ class PubMedHTMLToMarkdownConverter:
             html_content (str): The HTML content to convert
         Returns:
             str: The markdown content
+        Raises:
+            ValueError: If the HTML appears to be a WAF/CAPTCHA challenge page
         """
+        if is_waf_or_captcha_html(html_content):
+            raise ValueError(
+                "HTML appears to be a WAF/CAPTCHA challenge page rather than a PMC article"
+            )
+
         self.soup = BeautifulSoup(html_content, "html.parser")
 
         # Build markdown document
@@ -77,7 +86,7 @@ class PubMedHTMLToMarkdownConverter:
                 return f"PMC{match.group(1)}"
 
         # Look in text content
-        pmcid_text = self.soup.find(text=re.compile(r"PMCID:\s*PMC\d+"))
+        pmcid_text = self.soup.find(string=re.compile(r"PMCID:\s*PMC\d+"))
         if pmcid_text:
             match = re.search(r"PMC\d+", pmcid_text)
             if match:
@@ -162,11 +171,11 @@ class PubMedHTMLToMarkdownConverter:
             lines.append(f"**PMID:** {metadata['pmid']}")
 
         # PMCID
-        if "pmcid" in metadata:
+        if metadata.get("pmcid"):
             lines.append(f"**PMCID:** {metadata['pmcid']}")
 
         # URL
-        if "pmcid" in metadata:
+        if metadata.get("pmcid"):
             url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{metadata['pmcid']}/"
             lines.append(f"**URL:** {url}")
 

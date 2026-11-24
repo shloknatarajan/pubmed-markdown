@@ -11,9 +11,15 @@ import xml.etree.ElementTree as ET
 from typing import Optional
 from loguru import logger
 
+from .http_utils import DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT, get_with_retries
+
 
 def get_abstract_markdown_from_pmid(
-    pmid: str, email: Optional[str] = None
+    pmid: str,
+    email: Optional[str] = None,
+    ncbi_key: Optional[str] = None,
+    timeout: float = DEFAULT_TIMEOUT,
+    max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> Optional[str]:
     """
     Fetch the abstract and metadata for a PMID from PubMed and return as markdown.
@@ -21,6 +27,10 @@ def get_abstract_markdown_from_pmid(
     Args:
         pmid (str): The PubMed ID to fetch
         email (str, optional): Email for NCBI API identification. Falls back to NCBI_EMAIL env var.
+        ncbi_key (str, optional): NCBI API key (increases rate limit from 3 to 10 req/s).
+            Falls back to NCBI_API_KEY env var.
+        timeout (float): HTTP request timeout in seconds (default: 30.0)
+        max_retries (int): Number of retry attempts for transient errors (default: 2)
 
     Returns:
         Optional[str]: Markdown-formatted abstract with title/authors, or None on failure
@@ -33,6 +43,9 @@ def get_abstract_markdown_from_pmid(
             "or pass email explicitly. NCBI may block requests without identification."
         )
 
+    if not ncbi_key:
+        ncbi_key = os.getenv("NCBI_API_KEY")
+
     url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
     params = {
         "db": "pubmed",
@@ -42,9 +55,18 @@ def get_abstract_markdown_from_pmid(
         "tool": "pubmed_downloader",
         "email": email,
     }
+    if ncbi_key:
+        params["api_key"] = ncbi_key
 
     try:
-        response = requests.get(url, params=params)
+        response = get_with_retries(
+            url,
+            request_fn=requests.get,
+            params=params,
+            timeout=timeout,
+            max_retries=max_retries,
+            context=f"abstract PMID {pmid}",
+        )
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
         logger.error(f"Failed to fetch abstract for PMID {pmid}: {e}")

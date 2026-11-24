@@ -5,12 +5,16 @@ import time
 from tqdm import tqdm
 from loguru import logger
 
+from .http_utils import DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT, get_with_retries
+
 
 def get_pmcid_from_pmid(
     pmids: Union[List[str], str],
     email: Optional[str] = None,
     batch_size: int = 200,
     delay: float = 0.4,
+    timeout: float = DEFAULT_TIMEOUT,
+    max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> Dict[str, Optional[str]]:
     """
     Convert a list of PMIDs to PMCIDs using NCBI's ID Converter API.
@@ -20,6 +24,8 @@ def get_pmcid_from_pmid(
         email: Your email address for NCBI tool identification.
         batch_size: Number of PMIDs to send per request (max: 200).
         delay: Seconds to wait between requests (default 0.4 to respect NCBI).
+        timeout: HTTP request timeout in seconds (default: 30.0).
+        max_retries: Number of retry attempts for transient errors (default: 2).
 
     Returns:
         Dict mapping each PMID to a PMCID (or None if not available).
@@ -60,7 +66,14 @@ def get_pmcid_from_pmid(
         }
 
         try:
-            response = requests.get(url, params=params)
+            response = get_with_retries(
+                url,
+                request_fn=requests.get,
+                params=params,
+                timeout=timeout,
+                max_retries=max_retries,
+                context=f"ID converter batch {i}",
+            )
             response.raise_for_status()
             data = response.json()
             records = data.get("records", [])
@@ -88,7 +101,8 @@ def get_pmcid_from_pmid(
             for pmid in batch:
                 results[pmid] = None
 
-        time.sleep(delay)
+        if i + batch_size < len(pmids) and delay > 0:
+            time.sleep(delay)
 
     # Final summary logging with counts and a small sample
     valid_count = sum(1 for v in results.values() if v is not None)
