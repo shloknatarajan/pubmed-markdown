@@ -172,12 +172,13 @@ def test_full_jats_conversion(converter):
         in md
     )
 
-    # References (structured + unstructured mixed-citation fallback)
+    # References (structured + unstructured mixed-citation fallback, no double periods)
     assert "## References" in md
     assert (
-        "1. Gaedigk A et al.. PharmVar. *Clin Pharmacol Ther*. **103** (2018). 399-406."
+        "1. Gaedigk A et al. PharmVar. *Clin Pharmacol Ther*. **103** (2018). 399-406."
         in md
     )
+    assert "et al.." not in md
     assert "[DOI](https://doi.org/10.1002/cpt.957)" in md
     assert "[PubMed](https://pubmed.ncbi.nlm.nih.gov/29134625)" in md
     assert "[PMC](https://pmc.ncbi.nlm.nih.gov/articles/PMC5869103/)" in md
@@ -301,3 +302,53 @@ def test_back_matter_extraction(converter):
     assert "Supplementary derivation." in md
     assert "## Notes" in md
     assert "**Disclosures:** None." in md
+
+
+def test_formatting_quirk_fixes(converter):
+    """Covers .jpg.jpg URLs, double bullets, double periods in refs, and [[1]] citations."""
+    xml = """<article xmlns:xlink="http://www.w3.org/1999/xlink">
+      <body>
+        <sec>
+          <title>Highlights</title>
+          <list list-type="bullet">
+            <list-item><p>- First highlight with leading dash.</p></list-item>
+            <list-item><p>• Second highlight with unicode bullet.</p></list-item>
+          </list>
+          <p>Already bracketed [<xref ref-type="bibr">1</xref>] and multi [<xref ref-type="bibr">2</xref>,<xref ref-type="bibr">3</xref>].</p>
+          <fig>
+            <label>Figure 1</label>
+            <graphic xlink:href="nihms-1855942-f0002.jpg"/>
+          </fig>
+        </sec>
+      </body>
+      <back>
+        <ref-list>
+          <ref>
+            <element-citation>
+              <person-group>
+                <name><surname>Teo</surname><given-names>K.K.</given-names></name>
+                <name><surname>Rafiq</surname><given-names>T.</given-names></name>
+              </person-group>
+              <article-title>Risk Factors</article-title>
+              <source>Can. J. Cardiol.</source>
+              <volume>37</volume>
+              <year>2021</year>
+              <pub-id pub-id-type="doi">10.1016/j.cjca.2021.02.009</pub-id>
+            </element-citation>
+          </ref>
+        </ref-list>
+      </back>
+    </article>"""
+    md = converter.convert_xml(xml)
+    assert "- First highlight with leading dash." in md
+    assert "- - " not in md
+    assert "- Second highlight with unicode bullet." in md
+    assert "Already bracketed [1] and multi [2,3]." in md
+    assert "[[" not in md
+    assert (
+        "![Figure 1](https://pmc.ncbi.nlm.nih.gov/articles/instance/nihms-1855942-f0002/bin/nihms-1855942-f0002.jpg)"
+        in md
+    )
+    assert ".jpg.jpg" not in md
+    assert "1. Teo K.K., Rafiq T. Risk Factors. *Can. J. Cardiol.* **37** (2021)." in md
+    assert ".." not in md

@@ -29,6 +29,39 @@ def _safe_colspan(cell: Tag) -> int:
         return 1
 
 
+def _is_inside_square_brackets(tag: Tag) -> bool:
+    """Return True if an inline <xref> is already enclosed by literal '[' in its parent."""
+    sep_re = re.compile(r"^[\s,;:\-–—]*$")
+    sib = tag.previous_sibling
+    while sib is not None:
+        if isinstance(sib, NavigableString):
+            s = str(sib)
+            if sep_re.match(s):
+                sib = sib.previous_sibling
+                continue
+            return s.rstrip().endswith("[")
+        if isinstance(sib, Tag) and sib.name == "xref":
+            sib = sib.previous_sibling
+            continue
+        return False
+    return False
+
+
+def _join_citation_parts(parts: list[str]) -> str:
+    """Join citation segments with '. ' without creating double periods."""
+    result = ""
+    for part in parts:
+        if not part:
+            continue
+        if not result:
+            result = part
+        elif result.endswith((".", "?", "!")) or result.endswith((".*", "?*", "!*")):
+            result += f" {part}"
+        else:
+            result += f". {part}"
+    return result
+
+
 class JATSToMarkdownConverter:
     """Converts JATS XML from NCBI E-utilities / Europe PMC to markdown format."""
 
@@ -477,6 +510,10 @@ class JATSToMarkdownConverter:
             ref_type = child.get("ref-type", "")
             text = child.get_text().strip()
             if ref_type in ("bibr", "fig", "table", "table-fn"):
+                if (
+                    text.startswith("[") and text.endswith("]")
+                ) or _is_inside_square_brackets(child):
+                    return text
                 return f"[{text}]"
             return text
         elif child.name in ("ext-link", "uri"):
@@ -640,7 +677,12 @@ class JATSToMarkdownConverter:
                 if href.startswith(("http://", "https://")):
                     img_url = href
                 else:
-                    img_url = f"https://pmc.ncbi.nlm.nih.gov/articles/instance/{href}/bin/{href}.jpg"
+                    ext_re = re.compile(
+                        r"\.(?:jpe?g|png|gif|svg|tiff?|webp)$", re.IGNORECASE
+                    )
+                    filename = href if ext_re.search(href) else f"{href}.jpg"
+                    stem = ext_re.sub("", href)
+                    img_url = f"https://pmc.ncbi.nlm.nih.gov/articles/instance/{stem}/bin/{filename}"
                 label_text = self._clean_text(label.get_text()) if label else "Figure"
                 lines.append(f"![{label_text}]({img_url})")
                 lines.append("")
@@ -657,6 +699,7 @@ class JATSToMarkdownConverter:
             if list_type == "order":
                 lines.append(f"{i}. {text}")
             else:
+                text = re.sub(r"^[\-•–—]\s+", "", text)
                 lines.append(f"- {text}")
 
         return "\n".join(lines)
@@ -924,9 +967,10 @@ class JATSToMarkdownConverter:
                 return f"{num}. {raw_text} {' | '.join(links)}"
             return f"{num}. {raw_text}"
 
-        base = ". ".join(parts)
+        base = _join_citation_parts(parts)
         if links:
-            return f"{num}. {base}. {' | '.join(links)}"
+            sep = " " if base.endswith((".", "?", "!")) else ". "
+            return f"{num}. {base}{sep}{' | '.join(links)}"
         return f"{num}. {base}"
 
     def _clean_text(self, text: str) -> str:
