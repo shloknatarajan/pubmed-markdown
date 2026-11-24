@@ -145,7 +145,7 @@ def get_xml_from_ncbi_efetch(
 def get_xml_from_europe_pmc(
     pmcid: str,
     timeout: float = EUROPE_PMC_DEFAULT_TIMEOUT,
-    max_retries: int = 1,
+    max_retries: int = 0,
     require_full_text: bool = True,
 ) -> Optional[str]:
     """
@@ -154,7 +154,7 @@ def get_xml_from_europe_pmc(
     Args:
         pmcid: PMCID to fetch (e.g. "PMC10275785").
         timeout: HTTP request timeout in seconds (default: 15.0).
-        max_retries: Number of retries for transient errors (default: 1).
+        max_retries: Number of retries for transient errors (default: 0 for fast fallback).
         require_full_text: If True, return None when <body> is absent.
 
     Returns:

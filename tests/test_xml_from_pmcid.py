@@ -181,9 +181,23 @@ def test_europe_pmc_404_returns_none(mock_get):
 
 @patch("pubmed_markdown.http_utils.time.sleep")
 @patch("pubmed_markdown.xml_from_pmcid.requests.get")
+def test_europe_pmc_500_fails_fast_without_retries(mock_get, mock_sleep):
+    mock_resp = MagicMock(status_code=500, text="Server Error")
+    mock_resp.raise_for_status.side_effect = requests.exceptions.HTTPError("500")
+    mock_get.return_value = mock_resp
+
+    assert get_xml_from_europe_pmc("PMC13717721") is None
+    assert mock_get.call_count == 1
+    mock_sleep.assert_not_called()
+
+
+@patch("pubmed_markdown.http_utils.time.sleep")
+@patch("pubmed_markdown.xml_from_pmcid.requests.get")
 def test_europe_pmc_tls_reset_returns_none(mock_get, mock_sleep):
     mock_get.side_effect = requests.exceptions.SSLError("TLS reset")
     assert get_xml_from_europe_pmc("PMC13729000") is None
+    assert mock_get.call_count == 1
+    mock_sleep.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

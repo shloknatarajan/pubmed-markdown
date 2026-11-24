@@ -248,3 +248,56 @@ def test_convert_file(converter, tmp_path):
     xml_file.write_text(FULL_JATS_XML, encoding="utf-8")
     md = converter.convert_file(str(xml_file))
     assert "# Pharmacogenomics of *CYP2D6* in Clinical Practice" in md
+
+
+def test_back_matter_extraction(converter):
+    xml = """<article>
+      <front><article-meta><title-group><article-title>Back Matter Test</article-title></title-group></article-meta></front>
+      <body><sec><title>Intro</title><p>Body text.</p></sec></body>
+      <back>
+        <ack><p>We thank the clinic staff.</p></ack>
+        <sec sec-type="data-availability">
+          <title>Data Availability Statement</title>
+          <p>Data available upon request.</p>
+        </sec>
+        <notes notes-type="COI-statement">
+          <title>Conflicts of Interest</title>
+          <p>The authors declare no conflicts.</p>
+        </notes>
+        <glossary>
+          <title>Abbreviations:</title>
+          <def-list>
+            <def-item><term>DILI</term><def><p>Drug-induced liver injury</p></def></def-item>
+            <def-item><term>GWAS</term><def><p>Genome-wide association study</p></def></def-item>
+          </def-list>
+        </glossary>
+        <glossary>
+          <title>Additional Abbreviations</title>
+          <p>Used below: <array><tbody><tr><td>ALT</td><td>Alanine aminotransferase</td></tr></tbody></array></p>
+        </glossary>
+        <app-group>
+          <app>
+            <title>Appendix A</title>
+            <p>Supplementary derivation.</p>
+          </app>
+        </app-group>
+        <fn-group>
+          <fn><p><bold>Disclosures:</bold> None.</p></fn>
+        </fn-group>
+      </back>
+    </article>"""
+    md = converter.convert_xml(xml)
+    assert "## Acknowledgments" in md
+    assert "We thank the clinic staff." in md
+    assert "## Data Availability Statement" in md
+    assert "Data available upon request." in md
+    assert "## Conflicts of Interest" in md
+    assert "The authors declare no conflicts." in md
+    assert "## Abbreviations" in md
+    assert "- **DILI:** Drug-induced liver injury" in md
+    assert "- **GWAS:** Genome-wide association study" in md
+    assert "| ALT | Alanine aminotransferase |" in md
+    assert "## Appendix A" in md
+    assert "Supplementary derivation." in md
+    assert "## Notes" in md
+    assert "**Disclosures:** None." in md

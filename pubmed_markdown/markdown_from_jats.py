@@ -15,7 +15,7 @@ from loguru import logger
 
 # Block-level JATS elements that can appear inside <p> but should be
 # extracted and rendered separately (not as inline text).
-_BLOCK_ELEMENTS = {"table-wrap", "fig", "disp-formula", "list"}
+_BLOCK_ELEMENTS = {"table-wrap", "fig", "disp-formula", "list", "array", "def-list"}
 _IGNORED_ABSTRACT_TYPES = {"graphical", "toc", "teaser"}
 
 
@@ -86,6 +86,11 @@ class JATSToMarkdownConverter:
         floats_md = self._extract_floats(article)
         if floats_md:
             parts.append(floats_md)
+
+        # Back matter (acknowledgments, appendices, glossary, notes, back sections)
+        back_md = self._extract_back_matter(article)
+        if back_md:
+            parts.append(back_md)
 
         # References
         refs = self._extract_references(article)
@@ -435,6 +440,18 @@ class JATSToMarkdownConverter:
                     if formula:
                         lines.append(formula)
                         lines.append("")
+                elif child.name == "array":
+                    flush_inline()
+                    table_md = self._convert_table_to_markdown(child)
+                    if table_md:
+                        lines.append(table_md)
+                        lines.append("")
+                elif child.name == "def-list":
+                    flush_inline()
+                    def_md = self._process_def_list(child)
+                    if def_md:
+                        lines.append(def_md)
+                        lines.append("")
                 else:
                     inline_parts.append(self._inline_element_to_text(child))
 
@@ -643,6 +660,157 @@ class JATSToMarkdownConverter:
                 lines.append(f"- {text}")
 
         return "\n".join(lines)
+
+    def _process_def_list(self, def_list: Tag) -> str:
+        """Process a JATS <def-list> (e.g. abbreviations/glossary)."""
+        lines = []
+        title = def_list.find("title", recursive=False)
+        if title:
+            title_text = self._clean_text(self._inline_to_text(title)).rstrip(":")
+            if title_text:
+                lines.append(f"### {title_text}")
+                lines.append("")
+
+        for item in def_list.find_all("def-item", recursive=False):
+            term = item.find("term")
+            definition = item.find("def")
+            term_text = self._clean_text(term.get_text()) if term else ""
+            def_text = self._clean_text(definition.get_text()) if definition else ""
+            if term_text and def_text:
+                lines.append(f"- **{term_text}:** {def_text}")
+            elif term_text:
+                lines.append(f"- **{term_text}**")
+            elif def_text:
+                lines.append(f"- {def_text}")
+
+        return "\n".join(lines)
+
+    def _process_back_section(
+        self, element: Tag, default_title: str = "", level: int = 2
+    ) -> str:
+        """Process a back-matter container (<ack>, <notes>, <app>, etc.)."""
+        lines = []
+        title = element.find("title", recursive=False)
+        title_text = (
+            self._clean_text(self._inline_to_text(title)).rstrip(":") if title else ""
+        )
+        heading = title_text or default_title
+        if heading:
+            lines.append(f"{'#' * level} {heading}")
+            lines.append("")
+
+        body_lines = []
+        for child in element.children:
+            if not isinstance(child, Tag):
+                continue
+            if child.name == "title":
+                continue
+            elif child.name == "p":
+                self._process_p_with_blocks(child, body_lines)
+            elif child.name == "sec":
+                sub = self._process_section(child, level=min(level + 1, 6))
+                if sub:
+                    body_lines.append(sub)
+            elif child.name == "table-wrap":
+                tbl = self._process_table_wrap(child)
+                if tbl:
+                    body_lines.append(tbl)
+            elif child.name == "fig":
+                fig = self._process_figure(child)
+                if fig:
+                    body_lines.append(fig)
+            elif child.name == "list":
+                lst = self._process_list(child)
+                if lst:
+                    body_lines.append(lst)
+                    body_lines.append("")
+            elif child.name == "def-list":
+                dl = self._process_def_list(child)
+                if dl:
+                    body_lines.append(dl)
+                    body_lines.append("")
+            elif child.name in ("array", "table"):
+                tbl = self._convert_table_to_markdown(child)
+                if tbl:
+                    body_lines.append(tbl)
+                    body_lines.append("")
+
+        if not body_lines:
+            return ""
+
+        lines.extend(body_lines)
+        return "\n".join(lines)
+
+    def _process_fn_group(self, fn_group: Tag) -> str:
+        """Process a JATS <fn-group> (e.g. disclosures, competing interests, notes)."""
+        lines = []
+        title = fn_group.find("title", recursive=False)
+        title_text = (
+            self._clean_text(self._inline_to_text(title)).rstrip(":") if title else ""
+        )
+        lines.append(f"## {title_text or 'Notes'}")
+        lines.append("")
+
+        body_lines = []
+        for fn in fn_group.find_all("fn", recursive=False):
+            fn_title = fn.find("title", recursive=False)
+            if fn_title:
+                ft = self._clean_text(self._inline_to_text(fn_title)).rstrip(":")
+                if ft:
+                    body_lines.append(f"### {ft}")
+                    body_lines.append("")
+            for p in fn.find_all("p", recursive=False):
+                self._process_p_with_blocks(p, body_lines)
+
+        if not body_lines:
+            return ""
+
+        lines.extend(body_lines)
+        return "\n".join(lines)
+
+    def _extract_back_matter(self, article: Tag) -> str:
+        """Extract non-reference sections from JATS <back> (ack, glossary, notes, appendices, etc.)."""
+        back = article.find("back")
+        if not back:
+            return ""
+
+        sections = []
+        for child in back.children:
+            if not isinstance(child, Tag) or child.name == "ref-list":
+                continue
+
+            if child.name == "sec":
+                md = self._process_section(child, level=2)
+                if md:
+                    sections.append(md)
+            elif child.name == "ack":
+                md = self._process_back_section(child, default_title="Acknowledgments")
+                if md:
+                    sections.append(md)
+            elif child.name == "notes":
+                md = self._process_back_section(child, default_title="Notes")
+                if md:
+                    sections.append(md)
+            elif child.name == "glossary":
+                md = self._process_back_section(child, default_title="Abbreviations")
+                if md:
+                    sections.append(md)
+            elif child.name == "app-group":
+                for app in child.find_all("app", recursive=False):
+                    # If <app> directly wraps <sec> without its own <title>, avoid a redundant "## Appendix" heading
+                    app_title = app.find("title", recursive=False)
+                    if app_title:
+                        md = self._process_back_section(app, default_title="Appendix")
+                    else:
+                        md = self._process_back_section(app, default_title="")
+                    if md:
+                        sections.append(md)
+            elif child.name == "fn-group":
+                md = self._process_fn_group(child)
+                if md:
+                    sections.append(md)
+
+        return "\n\n".join(sections)
 
     def _extract_references(self, article: Tag) -> str:
         """Extract references from JATS <back>."""
