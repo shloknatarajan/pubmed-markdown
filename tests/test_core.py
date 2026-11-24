@@ -45,9 +45,31 @@ EFETCH_XML = """<?xml version="1.0"?>
 """
 
 
+SAMPLE_JATS_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<pmc-articleset>
+  <article>
+    <front>
+      <article-meta>
+        <article-id pub-id-type="pmid">11111111</article-id>
+        <article-id pub-id-type="pmc">5555555</article-id>
+        <title-group><article-title>Test JATS Article</article-title></title-group>
+        <abstract><p>JATS abstract content.</p></abstract>
+      </article-meta>
+    </front>
+    <body>
+      <sec id="sec1">
+        <title>Introduction</title>
+        <p>JATS intro text.</p>
+      </sec>
+    </body>
+  </article>
+</pmc-articleset>
+"""
+
+
 @pytest.fixture
 def converter():
-    return PubMedMarkdown(email="test@test.com")
+    return PubMedMarkdown(email="test@test.com", source="html")
 
 
 # ---------------------------------------------------------------------------
@@ -188,13 +210,15 @@ def test_pmid_to_markdown_no_pmcid_no_abstract(mock_pmcid, converter):
 def test_pmids_to_markdown_files_batch(
     mock_pmcid, mock_html, mock_supp, mock_abstract, tmp_path
 ):
-    """Full batch: one article with PMCID, one without."""
+    """Full batch: one article with PMCID, one without (HTML mode)."""
     mock_pmcid.return_value = {"111": "PMC001", "222": None}
     mock_html.return_value = SAMPLE_HTML
     mock_supp.return_value = None
     mock_abstract.return_value = "# Fallback\n\n## Abstract\n\nAbstract text."
 
-    converter = PubMedMarkdown(save_dir=str(tmp_path), email="test@test.com")
+    converter = PubMedMarkdown(
+        save_dir=str(tmp_path), email="test@test.com", source="html"
+    )
     converter.pmids_to_markdown_files(["111", "222"], save_dir=str(tmp_path))
 
     md_dir = tmp_path / "markdown"
@@ -225,7 +249,7 @@ def test_pmids_to_markdown_files_single_string(
     mock_html.return_value = SAMPLE_HTML
     mock_supp.return_value = None
 
-    converter = PubMedMarkdown(email="test@test.com")
+    converter = PubMedMarkdown(email="test@test.com", source="html")
     converter.pmids_to_markdown_files("111", save_dir=str(tmp_path))
 
     md_dir = tmp_path / "markdown"
@@ -429,7 +453,7 @@ def test_pmid_to_markdown_list_batches_id_lookup_and_paces(
     mock_html.return_value = SAMPLE_HTML
     mock_supp.return_value = None
 
-    converter = PubMedMarkdown(email="test@test.com", request_delay=0.5)
+    converter = PubMedMarkdown(email="test@test.com", request_delay=0.5, source="html")
     results = converter.pmid_to_markdown(["11111111", "22222222"])
     assert len(results) == 2
     mock_pmcid.assert_called_once_with(["11111111", "22222222"], email="test@test.com")
@@ -455,3 +479,106 @@ def test_local_html_to_markdown_skips_waf_captcha_file(mock_supp, tmp_path):
 
     assert not (md_dir / "PMC_BAD.md").exists()
     assert (md_dir / "PMC_GOOD.md").exists()
+
+
+# ---------------------------------------------------------------------------
+# Multi-tier JATS XML + HTML strategy tests
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_source_raises_value_error():
+    with pytest.raises(ValueError, match="Invalid source"):
+        PubMedMarkdown(email="test@test.com", source="invalid")
+
+
+@patch("pubmed_markdown.core.format_supplement_as_markdown")
+@patch("pubmed_markdown.core.get_html_from_pmcid")
+@patch("pubmed_markdown.core.get_xml_from_pmcid")
+def test_auto_source_uses_jats_xml_first(mock_xml, mock_html, mock_supp):
+    mock_xml.return_value = SAMPLE_JATS_XML
+    mock_supp.return_value = None
+
+    pm = PubMedMarkdown(email="test@test.com", ncbi_key="my-key")
+    assert pm.source == "auto"
+    md = pm.pmcid_to_markdown("PMC5555555")
+
+    assert md is not None
+    assert "# Test JATS Article" in md
+    assert "JATS intro text." in md
+    mock_xml.assert_called_once_with(
+        "PMC5555555", email="test@test.com", ncbi_key="my-key"
+    )
+    mock_html.assert_not_called()
+
+
+@patch("pubmed_markdown.core.format_supplement_as_markdown")
+@patch("pubmed_markdown.core.get_html_from_pmcid")
+@patch("pubmed_markdown.core.get_xml_from_pmcid")
+def test_auto_source_falls_back_to_html_when_xml_restricted(
+    mock_xml, mock_html, mock_supp
+):
+    mock_xml.return_value = None
+    mock_html.return_value = SAMPLE_HTML
+    mock_supp.return_value = None
+
+    pm = PubMedMarkdown(email="test@test.com")
+    md = pm.pmcid_to_markdown("PMC5555555")
+
+    assert md is not None
+    assert "# Test Article" in md
+    mock_xml.assert_called_once()
+    mock_html.assert_called_once()
+
+
+@patch("pubmed_markdown.core.format_supplement_as_markdown")
+@patch("pubmed_markdown.core.get_xml_from_pmcid")
+@patch("pubmed_markdown.core.get_html_from_pmcid")
+def test_html_first_falls_back_to_jats_xml_on_waf_block(mock_html, mock_xml, mock_supp):
+    mock_html.return_value = None
+    mock_xml.return_value = SAMPLE_JATS_XML
+    mock_supp.return_value = None
+
+    pm = PubMedMarkdown(email="test@test.com", source="html_first")
+    md = pm.pmcid_to_markdown("PMC5555555")
+
+    assert md is not None
+    assert "# Test JATS Article" in md
+    mock_html.assert_called_once()
+    mock_xml.assert_called_once()
+
+
+@patch("pubmed_markdown.core.format_supplement_as_markdown")
+@patch("pubmed_markdown.core.get_html_from_pmcid")
+@patch("pubmed_markdown.core.get_xml_from_pmcid")
+def test_xml_only_source_does_not_fallback_to_html(mock_xml, mock_html, mock_supp):
+    mock_xml.return_value = None
+
+    pm = PubMedMarkdown(email="test@test.com", source="xml")
+    assert pm.pmcid_to_markdown("PMC5555555") is None
+    mock_xml.assert_called_once()
+    mock_html.assert_not_called()
+
+
+@patch("pubmed_markdown.core.get_abstract_markdown_from_pmid")
+@patch("pubmed_markdown.core.format_supplement_as_markdown")
+@patch("pubmed_markdown.core.get_html_from_pmcid")
+@patch("pubmed_markdown.core.get_xml_from_pmcid")
+@patch("pubmed_markdown.core.get_pmcid_from_pmid")
+def test_pmids_to_markdown_files_auto_uses_xml_and_saves_raw(
+    mock_pmcid, mock_xml, mock_html, mock_supp, mock_abstract, tmp_path
+):
+    mock_pmcid.return_value = {"111": "PMC5555555", "222": None}
+    mock_xml.return_value = SAMPLE_JATS_XML
+    mock_supp.return_value = None
+    mock_abstract.return_value = "# Abstract Fallback\n\n## Abstract\n\nOnly abstract."
+
+    pm = PubMedMarkdown(save_dir=str(tmp_path), email="test@test.com", source="auto")
+    pm.pmids_to_markdown_files(["111", "222"], save_dir=str(tmp_path))
+
+    assert (tmp_path / "xml" / "PMC5555555.xml").exists()
+    assert (tmp_path / "markdown" / "PMC5555555.md").exists()
+    assert (
+        "# Test JATS Article" in (tmp_path / "markdown" / "PMC5555555.md").read_text()
+    )
+    assert (tmp_path / "markdown" / "PMID222.md").exists()
+    mock_html.assert_not_called()

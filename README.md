@@ -22,10 +22,13 @@ Set your email for NCBI API identification (required to avoid 403 errors):
 export NCBI_EMAIL=your-email@institution.edu
 ```
 
-Or pass it directly:
+Or pass them directly:
 
 ```python
-downloader = PubMedMarkdown(email="your-email@institution.edu")
+downloader = PubMedMarkdown(
+    email="your-email@institution.edu",
+    ncbi_key="your-ncbi-api-key",  # optional; raises rate limit from 3 to 10 req/s
+)
 ```
 
 ## Quick Start
@@ -142,8 +145,8 @@ All methods accepting IDs take either a single string or a list of strings.
 ## How It Works
 
 1. **PMID to PMCID** -- Uses NCBI's ID Converter API with batching and rate limiting
-2. **HTML extraction** -- Fetches full article HTML from PubMed Central
-3. **Markdown conversion** -- Converts HTML to structured markdown preserving tables, figures, citations, and references
+2. **Multi-tier full-text extraction** -- By default (`source="auto"`), fetches JATS XML via NCBI E-utilities `efetch` (no WAF, works from cloud IPs), falls back to Europe PMC `fullTextXML`, and falls back to PMC HTML for publisher XML opt-outs or scanned articles. Pass `source="html_first"`, `"xml"`, or `"html"` to customize the tier order.
+3. **Markdown conversion** -- Converts JATS XML or PMC HTML to a consistent structured markdown schema preserving tables, figures, citations, and references
 4. **Supplementary materials** -- Fetches pre-processed supplement text via NCBI's BioC API
 5. **Abstract fallback** -- Articles not in PMC Open Access get abstract + metadata via NCBI E-Fetch
 

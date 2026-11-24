@@ -5,10 +5,11 @@ Public HTTP API for converting PubMed articles (by PMID or PMCID) to markdown.
 """
 
 import asyncio
+import os
 import re
 import uuid
 from contextlib import asynccontextmanager
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,9 +28,9 @@ limiter = Limiter(key_func=get_remote_address)
 
 # ---------------------------------------------------------------------------
 # NCBI concurrency gate – ensures we never exceed NCBI rate limits regardless
-# of how many inbound requests arrive at once.  3 req/s without an API key.
+# of how many inbound requests arrive at once. 3 req/s without key, 8 with key.
 # ---------------------------------------------------------------------------
-NCBI_CONCURRENCY = 3
+NCBI_CONCURRENCY = 8 if os.getenv("NCBI_API_KEY") else 3
 _ncbi_semaphore: asyncio.Semaphore
 
 # ---------------------------------------------------------------------------
@@ -125,24 +126,27 @@ class JobStatus(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Shared converter instance
-# ---------------------------------------------------------------------------
-_converter = PubMedMarkdown()
-
-
-# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-async def _convert_pmid(pmid: str, include_supplements: bool = True) -> ConvertResult:
+SourceStrategy = Literal["auto", "xml_first", "html_first", "xml", "html"]
+
+
+async def _convert_pmid(
+    pmid: str,
+    include_supplements: bool = True,
+    source: SourceStrategy = "auto",
+) -> ConvertResult:
     """Run the PMID→markdown pipeline in a thread (it does blocking I/O)."""
     from pubmed_markdown.pmcid_from_pmid import get_pmcid_from_pmid
-    from pubmed_markdown.html_from_pmcid import get_html_from_pmcid
     from pubmed_markdown.utils_bioc import format_supplement_as_markdown
 
     loop = asyncio.get_event_loop()
+    converter = PubMedMarkdown(source=source)
 
     async with _ncbi_semaphore:
-        pmcid_mapping = await loop.run_in_executor(None, get_pmcid_from_pmid, [pmid])
+        pmcid_mapping = await loop.run_in_executor(
+            None, lambda: get_pmcid_from_pmid([pmid], email=converter.email)
+        )
     pmcid = pmcid_mapping.get(str(pmid))
     if pmcid is None:
         return ConvertResult(
@@ -152,26 +156,18 @@ async def _convert_pmid(pmid: str, include_supplements: bool = True) -> ConvertR
         )
 
     async with _ncbi_semaphore:
-        html = await loop.run_in_executor(None, get_html_from_pmcid, pmcid)
-    if html is None:
+        fetched = await loop.run_in_executor(
+            None, converter._fetch_pmcid_markdown, pmcid
+        )
+    if fetched is None:
         return ConvertResult(
             id=pmid,
             id_type="pmid",
             pmcid=pmcid,
-            error="Failed to fetch HTML from PubMed Central.",
+            error="Failed to fetch full text from PubMed Central (JATS XML and HTML).",
         )
 
-    try:
-        markdown = await loop.run_in_executor(
-            None, _converter.html_to_markdown.convert_html, html
-        )
-    except Exception as e:
-        return ConvertResult(
-            id=pmid,
-            id_type="pmid",
-            pmcid=pmcid,
-            error=f"HTML to markdown conversion failed: {e}",
-        )
+    markdown, _, _ = fetched
 
     has_supplements = False
     if include_supplements:
@@ -192,34 +188,30 @@ async def _convert_pmid(pmid: str, include_supplements: bool = True) -> ConvertR
     )
 
 
-async def _convert_pmcid(pmcid: str, include_supplements: bool = True) -> ConvertResult:
+async def _convert_pmcid(
+    pmcid: str,
+    include_supplements: bool = True,
+    source: SourceStrategy = "auto",
+) -> ConvertResult:
     """Run the PMCID→markdown pipeline in a thread (it does blocking I/O)."""
-    from pubmed_markdown.html_from_pmcid import get_html_from_pmcid
     from pubmed_markdown.utils_bioc import format_supplement_as_markdown
 
     loop = asyncio.get_event_loop()
+    converter = PubMedMarkdown(source=source)
 
     async with _ncbi_semaphore:
-        html = await loop.run_in_executor(None, get_html_from_pmcid, pmcid)
-    if html is None:
+        fetched = await loop.run_in_executor(
+            None, converter._fetch_pmcid_markdown, pmcid
+        )
+    if fetched is None:
         return ConvertResult(
             id=pmcid,
             id_type="pmcid",
             pmcid=pmcid,
-            error="Failed to fetch HTML from PubMed Central.",
+            error="Failed to fetch full text from PubMed Central (JATS XML and HTML).",
         )
 
-    try:
-        markdown = await loop.run_in_executor(
-            None, _converter.html_to_markdown.convert_html, html
-        )
-    except Exception as e:
-        return ConvertResult(
-            id=pmcid,
-            id_type="pmcid",
-            pmcid=pmcid,
-            error=f"HTML to markdown conversion failed: {e}",
-        )
+    markdown, _, _ = fetched
 
     has_supplements = False
     if include_supplements:
@@ -254,11 +246,12 @@ async def convert_pmid(
     request: Request,
     pmid: str,
     include_supplements: bool = Query(True),
+    source: SourceStrategy = Query("auto"),
 ):
     """Convert a single PMID to markdown."""
     if not PMID_PATTERN.match(pmid):
         raise HTTPException(status_code=422, detail="PMID must be numeric.")
-    result = await _convert_pmid(pmid, include_supplements)
+    result = await _convert_pmid(pmid, include_supplements, source=source)
     if result.error and result.markdown is None:
         raise HTTPException(
             status_code=404,
@@ -277,13 +270,14 @@ async def convert_pmcid(
     request: Request,
     pmcid: str,
     include_supplements: bool = Query(True),
+    source: SourceStrategy = Query("auto"),
 ):
     """Convert a single PMCID to markdown, skipping PMID resolution."""
     if not PMCID_PATTERN.match(pmcid):
         raise HTTPException(
             status_code=422, detail="PMCID must match pattern PMC followed by digits."
         )
-    result = await _convert_pmcid(pmcid, include_supplements)
+    result = await _convert_pmcid(pmcid, include_supplements, source=source)
     if result.error and result.markdown is None:
         raise HTTPException(
             status_code=404,
@@ -299,11 +293,16 @@ async def convert_pmcid(
 # ---------------------------------------------------------------------------
 # Batch endpoints — return a job ID, process in background
 # ---------------------------------------------------------------------------
-async def _run_batch_pmid_job(job_id: str, pmids: List[str], include_supplements: bool):
+async def _run_batch_pmid_job(
+    job_id: str,
+    pmids: List[str],
+    include_supplements: bool,
+    source: SourceStrategy = "auto",
+):
     _jobs[job_id]["status"] = "running"
     results: List[ConvertResult] = []
     for pmid in pmids:
-        result = await _convert_pmid(pmid, include_supplements)
+        result = await _convert_pmid(pmid, include_supplements, source=source)
         results.append(result)
         _jobs[job_id]["completed_count"] = len(results)
     _jobs[job_id]["status"] = "completed"
@@ -311,12 +310,15 @@ async def _run_batch_pmid_job(job_id: str, pmids: List[str], include_supplements
 
 
 async def _run_batch_pmcid_job(
-    job_id: str, pmcids: List[str], include_supplements: bool
+    job_id: str,
+    pmcids: List[str],
+    include_supplements: bool,
+    source: SourceStrategy = "auto",
 ):
     _jobs[job_id]["status"] = "running"
     results: List[ConvertResult] = []
     for pmcid in pmcids:
-        result = await _convert_pmcid(pmcid, include_supplements)
+        result = await _convert_pmcid(pmcid, include_supplements, source=source)
         results.append(result)
         _jobs[job_id]["completed_count"] = len(results)
     _jobs[job_id]["status"] = "completed"
@@ -329,6 +331,7 @@ async def batch_convert_pmids(
     request: Request,
     body: BatchPmidRequest,
     include_supplements: bool = Query(True),
+    source: SourceStrategy = Query("auto"),
 ):
     """Submit a batch of PMIDs for conversion. Returns a job ID to poll."""
     job_id = str(uuid.uuid4())
@@ -338,7 +341,9 @@ async def batch_convert_pmids(
         "completed_count": 0,
         "results": None,
     }
-    asyncio.create_task(_run_batch_pmid_job(job_id, body.pmids, include_supplements))
+    asyncio.create_task(
+        _run_batch_pmid_job(job_id, body.pmids, include_supplements, source=source)
+    )
     return JobStatus(job_id=job_id, status="pending", total=len(body.pmids))
 
 
@@ -348,6 +353,7 @@ async def batch_convert_pmcids(
     request: Request,
     body: BatchPmcidRequest,
     include_supplements: bool = Query(True),
+    source: SourceStrategy = Query("auto"),
 ):
     """Submit a batch of PMCIDs for conversion. Returns a job ID to poll."""
     job_id = str(uuid.uuid4())
@@ -357,7 +363,9 @@ async def batch_convert_pmcids(
         "completed_count": 0,
         "results": None,
     }
-    asyncio.create_task(_run_batch_pmcid_job(job_id, body.pmcids, include_supplements))
+    asyncio.create_task(
+        _run_batch_pmcid_job(job_id, body.pmcids, include_supplements, source=source)
+    )
     return JobStatus(job_id=job_id, status="pending", total=len(body.pmcids))
 
 
