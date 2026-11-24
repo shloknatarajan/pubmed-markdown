@@ -1,14 +1,18 @@
 from .pmcid_from_pmid import get_pmcid_from_pmid
 from .html_from_pmcid import get_html_from_pmcid
+from .xml_from_pmcid import get_xml_from_pmcid
 from .markdown_from_html import PubMedHTMLToMarkdownConverter
+from .markdown_from_jats import JATSToMarkdownConverter
 from .utils_bioc import format_supplement_as_markdown
 from .abstract_from_pmid import get_abstract_markdown_from_pmid
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 import os
 from loguru import logger
 from tqdm import tqdm
 import argparse
 import time
+
+VALID_SOURCES = ("auto", "xml_first", "html_first", "xml", "html")
 
 
 class PubMedMarkdown:
@@ -18,8 +22,14 @@ class PubMedMarkdown:
         email (str, optional): Email for NCBI API identification. Falls back to NCBI_EMAIL env var.
         ncbi_key (str, optional): NCBI API key for E-utilities (increases rate limit from 3 to 10 req/s).
             Falls back to NCBI_API_KEY env var.
-        request_delay (float, optional): Minimum delay in seconds between consecutive PMC requests
-            in batch operations (default: 0.5).
+        request_delay (float, optional): Minimum delay in seconds between consecutive article requests
+            in batch operations. Defaults to 0.15s (with ncbi_key) / 0.4s (without) for XML-first
+            modes, or 0.5s for HTML-first / HTML-only modes.
+        source (str): Full-text fetching strategy:
+            - "auto" / "xml_first" (default): NCBI E-utilities JATS XML -> Europe PMC XML -> PMC HTML
+            - "html_first": PMC HTML -> NCBI E-utilities JATS XML -> Europe PMC XML
+            - "xml": JATS XML only (NCBI E-utilities -> Europe PMC)
+            - "html": PMC HTML only (legacy behavior)
     """
 
     def __init__(
@@ -28,12 +38,24 @@ class PubMedMarkdown:
         email: Optional[str] = None,
         ncbi_key: Optional[str] = None,
         request_delay: Optional[float] = None,
+        source: str = "auto",
     ):
+        if source not in VALID_SOURCES:
+            raise ValueError(
+                f"Invalid source '{source}'. Must be one of: {', '.join(VALID_SOURCES)}"
+            )
         self.html_to_markdown = PubMedHTMLToMarkdownConverter()
+        self.jats_to_markdown = JATSToMarkdownConverter()
         self.save_dir = save_dir
         self.email = email or os.getenv("NCBI_EMAIL")
         self.ncbi_key = ncbi_key or os.getenv("NCBI_API_KEY")
-        self.request_delay = 0.5 if request_delay is None else request_delay
+        self.source = source
+        if request_delay is not None:
+            self.request_delay = request_delay
+        elif source in ("html_first", "html"):
+            self.request_delay = 0.5
+        else:
+            self.request_delay = self._eutils_delay
         if not self.email:
             logger.warning(
                 "No NCBI email configured. Set NCBI_EMAIL environment variable "
@@ -45,10 +67,28 @@ class PubMedMarkdown:
         """Delay between consecutive NCBI E-utilities calls (~10 req/s with key, ~3 req/s without)."""
         return 0.15 if self.ncbi_key else 0.4
 
-    def _single_pmcid_to_markdown(
-        self, pmcid: str, include_supplements: bool = True
-    ) -> Optional[str]:
-        """Convert a single PMCID to markdown. Internal helper."""
+    def _try_xml_to_markdown(self, pmcid: str) -> Optional[Tuple[str, str]]:
+        """Fetch JATS XML (NCBI efetch -> Europe PMC) and convert to markdown."""
+        xml = get_xml_from_pmcid(pmcid, email=self.email, ncbi_key=self.ncbi_key)
+        if xml is None:
+            return None
+
+        try:
+            markdown = self.jats_to_markdown.convert_xml(xml)
+        except Exception as e:
+            logger.error(
+                f"Error converting JATS XML to markdown for PMCID {pmcid}: {str(e)}"
+            )
+            return None
+
+        if not markdown or not markdown.strip():
+            logger.warning(f"Empty markdown produced from JATS XML for PMCID {pmcid}")
+            return None
+
+        return markdown, xml
+
+    def _try_html_to_markdown(self, pmcid: str) -> Optional[Tuple[str, str]]:
+        """Fetch PMC HTML and convert to markdown."""
         html = get_html_from_pmcid(pmcid, email=self.email)
         if html is None:
             return None
@@ -60,6 +100,61 @@ class PubMedMarkdown:
                 f"Error converting HTML to markdown for PMCID {pmcid}: {str(e)}"
             )
             return None
+
+        return markdown, html
+
+    def _fetch_pmcid_markdown(self, pmcid: str) -> Optional[Tuple[str, str, str]]:
+        """
+        Fetch and convert a single PMCID according to `self.source`.
+
+        Returns:
+            Tuple of (markdown, format_name ["xml" | "html"], raw_content), or None on failure.
+        """
+        if self.source in ("auto", "xml_first"):
+            xml_result = self._try_xml_to_markdown(pmcid)
+            if xml_result is not None:
+                return xml_result[0], "xml", xml_result[1]
+            logger.info(
+                f"Falling back to PMC HTML for {pmcid} after JATS XML unavailable"
+            )
+            html_result = self._try_html_to_markdown(pmcid)
+            if html_result is not None:
+                return html_result[0], "html", html_result[1]
+            return None
+
+        if self.source == "html_first":
+            html_result = self._try_html_to_markdown(pmcid)
+            if html_result is not None:
+                return html_result[0], "html", html_result[1]
+            logger.info(
+                f"Falling back to JATS XML for {pmcid} after PMC HTML unavailable"
+            )
+            xml_result = self._try_xml_to_markdown(pmcid)
+            if xml_result is not None:
+                return xml_result[0], "xml", xml_result[1]
+            return None
+
+        if self.source == "xml":
+            xml_result = self._try_xml_to_markdown(pmcid)
+            if xml_result is not None:
+                return xml_result[0], "xml", xml_result[1]
+            return None
+
+        # self.source == "html"
+        html_result = self._try_html_to_markdown(pmcid)
+        if html_result is not None:
+            return html_result[0], "html", html_result[1]
+        return None
+
+    def _single_pmcid_to_markdown(
+        self, pmcid: str, include_supplements: bool = True
+    ) -> Optional[str]:
+        """Convert a single PMCID to markdown. Internal helper."""
+        fetched = self._fetch_pmcid_markdown(pmcid)
+        if fetched is None:
+            return None
+
+        markdown, _, _ = fetched
 
         if include_supplements:
             supplement = format_supplement_as_markdown(pmcid)
@@ -392,10 +487,50 @@ class PubMedMarkdown:
                 if f"PMID{pmid}" not in existing_markdown
             ]
 
-        # Full-text path: PMCIDs -> HTML -> Markdown
-        logger.info(f"Converting {len(valid_pmcids)} PMCIDs to Markdown (full text)")
-        self.pmcids_to_html(valid_pmcids, save_dir)
-        self.local_html_to_markdown(save_dir, overwrite=overwrite)
+        # Full-text path
+        logger.info(
+            f"Converting {len(valid_pmcids)} PMCIDs to Markdown (full text, source={self.source})"
+        )
+        if self.source == "html":
+            self.pmcids_to_html(valid_pmcids, save_dir)
+            self.local_html_to_markdown(save_dir, overwrite=overwrite)
+        elif valid_pmcids:
+            markdown_dir = os.path.join(save_dir, "markdown")
+            os.makedirs(markdown_dir, exist_ok=True)
+            for idx, pmcid in enumerate(
+                tqdm(valid_pmcids, desc="Converting PMCIDs to Markdown")
+            ):
+                if idx > 0 and self.request_delay > 0:
+                    time.sleep(self.request_delay)
+
+                fetched = self._fetch_pmcid_markdown(pmcid)
+                if fetched is None:
+                    logger.error(f"Failed to fetch full text for PMCID {pmcid}")
+                    continue
+
+                markdown, fmt, raw_content = fetched
+
+                raw_dir = os.path.join(save_dir, fmt)
+                os.makedirs(raw_dir, exist_ok=True)
+                raw_path = os.path.join(raw_dir, f"{pmcid}.{fmt}")
+                try:
+                    with open(raw_path, "w", encoding="utf-8") as f:
+                        f.write(raw_content)
+                except Exception as e:
+                    logger.warning(f"Error saving raw {fmt} for {pmcid}: {e}")
+
+                supplement = format_supplement_as_markdown(pmcid)
+                if supplement:
+                    markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
+                else:
+                    markdown = (
+                        markdown.rstrip()
+                        + "\n\n## Supplementary Materials\n\nNo supplementary materials found.\n"
+                    )
+
+                md_path = os.path.join(markdown_dir, f"{pmcid}.md")
+                with open(md_path, "w", encoding="utf-8") as f:
+                    f.write(markdown)
 
         # Abstract fallback for PMIDs without PMCIDs
         if pmids_without_pmcid:
@@ -438,6 +573,7 @@ def convert_pmids_from_file(
     overwrite: bool = False,
     email: Optional[str] = None,
     ncbi_key: Optional[str] = None,
+    source: str = "auto",
 ):
     """
     Convert pmids from a txt file to markdown
@@ -449,8 +585,9 @@ def convert_pmids_from_file(
         overwrite (bool): Whether to overwrite existing markdown files (default: False)
         email (str, optional): Email for NCBI API identification.
         ncbi_key (str, optional): NCBI API key for higher E-utilities rate limits.
+        source (str): Full-text fetching strategy (default: "auto").
     """
-    converter = PubMedMarkdown(email=email, ncbi_key=ncbi_key)
+    converter = PubMedMarkdown(email=email, ncbi_key=ncbi_key, source=source)
     pmids = [line.strip() for line in open(file_path, "r").readlines() if line.strip()]
     converter.pmids_to_markdown_files(pmids, save_dir, overwrite)
 
@@ -484,6 +621,13 @@ def main():
         default=None,
         help="NCBI API key for E-utilities (overrides NCBI_API_KEY env var)",
     )
+    parser.add_argument(
+        "--source",
+        type=str,
+        default="auto",
+        choices=VALID_SOURCES,
+        help="Full-text fetching strategy (default: 'auto' = XML-first with HTML fallback)",
+    )
     args = parser.parse_args()
 
     if args.file_path:
@@ -493,6 +637,7 @@ def main():
             args.overwrite,
             email=args.email,
             ncbi_key=args.ncbi_key,
+            source=args.source,
         )
     else:
         parser.error("--file_path is required")
