@@ -11,7 +11,6 @@ from pubmed_markdown.utils_bioc import (
     _extract_text_from_bioc_structured,
 )
 
-
 # ---------------------------------------------------------------------------
 # BioC JSON parsing
 # ---------------------------------------------------------------------------
@@ -129,14 +128,16 @@ def test_fetch_supplement_html_response(mock_get):
     assert text is None
 
 
+@patch("pubmed_markdown.http_utils.time.sleep")
 @patch("pubmed_markdown.utils_bioc.requests.get")
-def test_fetch_supplement_network_error(mock_get):
+def test_fetch_supplement_network_error(mock_get, mock_sleep):
     import requests
 
     mock_get.side_effect = requests.exceptions.ConnectionError("fail")
 
     text = fetch_bioc_supplement("PMC1234")
     assert text is None
+    assert mock_get.call_count == 3
 
 
 # ---------------------------------------------------------------------------

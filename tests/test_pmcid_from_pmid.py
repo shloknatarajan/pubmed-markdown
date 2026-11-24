@@ -5,7 +5,6 @@ import pytest
 
 from pubmed_markdown.pmcid_from_pmid import get_pmcid_from_pmid
 
-
 # ---------------------------------------------------------------------------
 # get_pmcid_from_pmid
 # ---------------------------------------------------------------------------
@@ -74,3 +73,19 @@ def test_whitespace_normalization(mock_get):
 
     result = get_pmcid_from_pmid("  12345  ", email="test@test.com")
     assert result["12345"] == "PMC111"
+    assert mock_get.call_args.kwargs["timeout"] == 30.0
+
+
+@patch("pubmed_markdown.http_utils.time.sleep")
+@patch("pubmed_markdown.pmcid_from_pmid.requests.get")
+def test_retries_on_transient_503(mock_get, mock_sleep):
+    resp_503 = MagicMock(status_code=503, headers={})
+    resp_200 = MagicMock(status_code=200)
+    resp_200.json.return_value = {"records": [{"pmid": "12345", "pmcid": "PMC111"}]}
+    resp_200.raise_for_status.return_value = None
+    mock_get.side_effect = [resp_503, resp_200]
+
+    result = get_pmcid_from_pmid("12345", email="test@test.com")
+    assert result["12345"] == "PMC111"
+    assert mock_get.call_count == 2
+    assert mock_sleep.call_count == 1

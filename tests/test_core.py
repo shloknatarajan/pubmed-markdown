@@ -7,7 +7,6 @@ import pytest
 
 from pubmed_markdown.core import PubMedMarkdown, convert_pmids_from_file
 
-
 SAMPLE_HTML = """
 <html>
 <head>
@@ -402,3 +401,57 @@ def test_constructor_no_email(monkeypatch):
     # Should not raise, just warn
     pm = PubMedMarkdown()
     assert pm.email is None
+
+
+def test_constructor_api_key_and_env(monkeypatch):
+    monkeypatch.setenv("NCBI_API_KEY", "env-api-key")
+    pm_env = PubMedMarkdown(email="user@example.com")
+    assert pm_env.api_key == "env-api-key"
+    assert pm_env._eutils_delay == 0.15
+
+    pm_explicit = PubMedMarkdown(email="user@example.com", api_key="explicit-key")
+    assert pm_explicit.api_key == "explicit-key"
+
+    monkeypatch.delenv("NCBI_API_KEY", raising=False)
+    pm_none = PubMedMarkdown(email="user@example.com")
+    assert pm_none.api_key is None
+    assert pm_none._eutils_delay == 0.4
+
+
+@patch("pubmed_markdown.core.time.sleep")
+@patch("pubmed_markdown.core.format_supplement_as_markdown")
+@patch("pubmed_markdown.core.get_html_from_pmcid")
+@patch("pubmed_markdown.core.get_pmcid_from_pmid")
+def test_pmid_to_markdown_list_batches_id_lookup_and_paces(
+    mock_pmcid, mock_html, mock_supp, mock_sleep
+):
+    mock_pmcid.return_value = {"11111111": "PMC5555555", "22222222": "PMC6666666"}
+    mock_html.return_value = SAMPLE_HTML
+    mock_supp.return_value = None
+
+    converter = PubMedMarkdown(email="test@test.com", request_delay=0.5)
+    results = converter.pmid_to_markdown(["11111111", "22222222"])
+    assert len(results) == 2
+    mock_pmcid.assert_called_once_with(["11111111", "22222222"], email="test@test.com")
+    mock_sleep.assert_called_once_with(0.5)
+
+
+@patch("pubmed_markdown.core.format_supplement_as_markdown")
+def test_local_html_to_markdown_skips_waf_captcha_file(mock_supp, tmp_path):
+    mock_supp.return_value = None
+
+    html_dir = tmp_path / "html"
+    html_dir.mkdir()
+    md_dir = tmp_path / "markdown"
+    md_dir.mkdir()
+
+    (html_dir / "PMC_BAD.html").write_text(
+        "<html><head><title>Checking your browser - reCAPTCHA</title></head></html>"
+    )
+    (html_dir / "PMC_GOOD.html").write_text(SAMPLE_HTML)
+
+    converter = PubMedMarkdown(email="test@test.com")
+    converter.local_html_to_markdown(save_dir=str(tmp_path))
+
+    assert not (md_dir / "PMC_BAD.md").exists()
+    assert (md_dir / "PMC_GOOD.md").exists()

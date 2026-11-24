@@ -16,17 +16,34 @@ class PubMedMarkdown:
     Args:
         save_dir (str): Directory to save the files to (default: "data/")
         email (str, optional): Email for NCBI API identification. Falls back to NCBI_EMAIL env var.
+        api_key (str, optional): NCBI API key for E-utilities (increases rate limit from 3 to 10 req/s).
+            Falls back to NCBI_API_KEY env var.
+        request_delay (float, optional): Minimum delay in seconds between consecutive PMC requests
+            in batch operations (default: 0.5).
     """
 
-    def __init__(self, save_dir: str = "data", email: Optional[str] = None):
+    def __init__(
+        self,
+        save_dir: str = "data",
+        email: Optional[str] = None,
+        api_key: Optional[str] = None,
+        request_delay: Optional[float] = None,
+    ):
         self.html_to_markdown = PubMedHTMLToMarkdownConverter()
         self.save_dir = save_dir
         self.email = email or os.getenv("NCBI_EMAIL")
+        self.api_key = api_key or os.getenv("NCBI_API_KEY")
+        self.request_delay = 0.5 if request_delay is None else request_delay
         if not self.email:
             logger.warning(
                 "No NCBI email configured. Set NCBI_EMAIL environment variable "
                 "or pass email to PubMedMarkdown(). NCBI may block requests (403)."
             )
+
+    @property
+    def _eutils_delay(self) -> float:
+        """Delay between consecutive NCBI E-utilities calls (~10 req/s with key, ~3 req/s without)."""
+        return 0.15 if self.api_key else 0.4
 
     def _single_pmcid_to_markdown(
         self, pmcid: str, include_supplements: bool = True
@@ -70,24 +87,28 @@ class PubMedMarkdown:
         if isinstance(pmcids, str):
             return self._single_pmcid_to_markdown(pmcids, include_supplements)
 
-        return [
-            self._single_pmcid_to_markdown(pmcid, include_supplements)
-            for pmcid in tqdm(pmcids, desc="Converting PMCIDs to markdown")
-        ]
+        results: List[Optional[str]] = []
+        for idx, pmcid in enumerate(tqdm(pmcids, desc="Converting PMCIDs to markdown")):
+            if idx > 0 and self.request_delay > 0:
+                time.sleep(self.request_delay)
+            results.append(self._single_pmcid_to_markdown(pmcid, include_supplements))
+        return results
 
     def _single_pmid_to_markdown(
         self, pmid: str, include_supplements: bool = True
     ) -> Optional[str]:
         """Convert a single PMID to markdown. Internal helper."""
         pmcid_mapping = get_pmcid_from_pmid([pmid], email=self.email)
-        pmcid = pmcid_mapping.get(str(pmid))
+        pmcid = pmcid_mapping.get(str(pmid).strip())
 
         if pmcid is None:
             logger.warning(
                 f"PMID {pmid} is not available on PubMed Central (Open Access). "
                 f"Downloading abstract only."
             )
-            return get_abstract_markdown_from_pmid(pmid, email=self.email)
+            return get_abstract_markdown_from_pmid(
+                pmid, email=self.email, api_key=self.api_key
+            )
 
         return self._single_pmcid_to_markdown(pmcid, include_supplements)
 
@@ -111,10 +132,35 @@ class PubMedMarkdown:
         if isinstance(pmid, str):
             return self._single_pmid_to_markdown(pmid, include_supplements)
 
-        return [
-            self._single_pmid_to_markdown(p, include_supplements)
-            for p in tqdm(pmid, desc="Converting PMIDs to markdown")
-        ]
+        normalized_pmids = [str(p).strip() for p in pmid]
+        pmcid_mapping = get_pmcid_from_pmid(normalized_pmids, email=self.email)
+
+        results: List[Optional[str]] = []
+        for idx, p in enumerate(
+            tqdm(normalized_pmids, desc="Converting PMIDs to markdown")
+        ):
+            pmcid = pmcid_mapping.get(p)
+            if idx > 0:
+                delay = self.request_delay if pmcid is not None else self._eutils_delay
+                if delay > 0:
+                    time.sleep(delay)
+
+            if pmcid is None:
+                logger.warning(
+                    f"PMID {p} is not available on PubMed Central (Open Access). "
+                    f"Downloading abstract only."
+                )
+                results.append(
+                    get_abstract_markdown_from_pmid(
+                        p, email=self.email, api_key=self.api_key
+                    )
+                )
+            else:
+                results.append(
+                    self._single_pmcid_to_markdown(pmcid, include_supplements)
+                )
+
+        return results
 
     def check_existing_html_pmcids(self, save_dir: str = "data/") -> List[str]:
         """
@@ -192,7 +238,11 @@ class PubMedMarkdown:
         for html_path in tqdm(
             html_paths, desc=f"Converting html ({save_dir}/html) to markdown"
         ):
-            markdown = self.html_to_markdown.convert_file(html_path)
+            try:
+                markdown = self.html_to_markdown.convert_file(html_path)
+            except Exception as e:
+                logger.error(f"Skipping {html_path}: {e}")
+                continue
 
             # Append supplementary materials
             pmcid = os.path.basename(html_path).replace(".html", "")
@@ -276,7 +326,9 @@ class PubMedMarkdown:
         logger.info(f"Converting {len(pmcids)} PMCIDs to HTML")
 
         # Convert to HTML
-        for pmcid in tqdm(pmcids, desc="Converting PMCIDs to HTML"):
+        for idx, pmcid in enumerate(tqdm(pmcids, desc="Converting PMCIDs to HTML")):
+            if idx > 0 and self.request_delay > 0:
+                time.sleep(self.request_delay)
             html_text = get_html_from_pmcid(pmcid, email=self.email)
             if html_text is None:
                 logger.error(f"No HTML found for PMCID {pmcid}")
@@ -354,17 +406,20 @@ class PubMedMarkdown:
             markdown_dir = os.path.join(save_dir, "markdown")
             os.makedirs(markdown_dir, exist_ok=True)
 
-            for pmid in tqdm(
-                pmids_without_pmcid, desc="Fetching abstracts for non-OA articles"
+            for idx, pmid in enumerate(
+                tqdm(pmids_without_pmcid, desc="Fetching abstracts for non-OA articles")
             ):
+                if idx > 0 and self._eutils_delay > 0:
+                    time.sleep(self._eutils_delay)
                 logger.warning(
                     f"PMID {pmid} is not available on PubMed Central (Open Access). "
                     f"Downloading abstract only."
                 )
-                markdown = get_abstract_markdown_from_pmid(pmid, email=self.email)
+                markdown = get_abstract_markdown_from_pmid(
+                    pmid, email=self.email, api_key=self.api_key
+                )
                 if markdown is None:
                     logger.error(f"Failed to fetch abstract for PMID {pmid}")
-                    time.sleep(0.5)
                     continue
 
                 markdown = (
@@ -376,15 +431,13 @@ class PubMedMarkdown:
                 with open(md_path, "w") as f:
                     f.write(markdown)
 
-                # Respect NCBI rate limit (~3 requests/sec without API key)
-                time.sleep(0.4)
-
 
 def convert_pmids_from_file(
     file_path: str,
     save_dir: str = "data",
     overwrite: bool = False,
     email: Optional[str] = None,
+    api_key: Optional[str] = None,
 ):
     """
     Convert pmids from a txt file to markdown
@@ -395,8 +448,9 @@ def convert_pmids_from_file(
         save_dir (str): Directory to save the files to (default: "data/")
         overwrite (bool): Whether to overwrite existing markdown files (default: False)
         email (str, optional): Email for NCBI API identification.
+        api_key (str, optional): NCBI API key for higher E-utilities rate limits.
     """
-    converter = PubMedMarkdown(email=email)
+    converter = PubMedMarkdown(email=email, api_key=api_key)
     pmids = [line.strip() for line in open(file_path, "r").readlines() if line.strip()]
     converter.pmids_to_markdown_files(pmids, save_dir, overwrite)
 
@@ -424,11 +478,21 @@ def main():
         default=None,
         help="Email for NCBI API identification (overrides NCBI_EMAIL env var)",
     )
+    parser.add_argument(
+        "--api_key",
+        type=str,
+        default=None,
+        help="NCBI API key for E-utilities (overrides NCBI_API_KEY env var)",
+    )
     args = parser.parse_args()
 
     if args.file_path:
         convert_pmids_from_file(
-            args.file_path, args.save_dir, args.overwrite, email=args.email
+            args.file_path,
+            args.save_dir,
+            args.overwrite,
+            email=args.email,
+            api_key=args.api_key,
         )
     else:
         parser.error("--file_path is required")

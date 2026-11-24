@@ -8,7 +8,6 @@ from pubmed_markdown.abstract_from_pmid import (
     _get_element_text,
 )
 
-
 EFETCH_XML_RESPONSE = """<?xml version="1.0" encoding="UTF-8"?>
 <PubmedArticleSet>
   <PubmedArticle>
@@ -138,13 +137,60 @@ def test_no_abstract_available(mock_get):
     assert "No abstract available." in md
 
 
+@patch("pubmed_markdown.http_utils.time.sleep")
 @patch("pubmed_markdown.abstract_from_pmid.requests.get")
-def test_api_failure(mock_get):
+def test_api_failure(mock_get, mock_sleep):
     import requests
 
     mock_get.side_effect = requests.exceptions.ConnectionError("fail")
     md = get_abstract_markdown_from_pmid("44444444", email="test@test.com")
     assert md is None
+    assert mock_get.call_count == 3
+
+
+@patch("pubmed_markdown.abstract_from_pmid.requests.get")
+def test_passes_api_key_and_timeout(mock_get, monkeypatch):
+    monkeypatch.delenv("NCBI_API_KEY", raising=False)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = EFETCH_XML_RESPONSE
+    mock_resp.raise_for_status.return_value = None
+    mock_get.return_value = mock_resp
+
+    md = get_abstract_markdown_from_pmid(
+        "11111111", email="test@test.com", api_key="secret-key", timeout=15.0
+    )
+    assert md is not None
+    assert mock_get.call_args.kwargs["params"]["api_key"] == "secret-key"
+    assert mock_get.call_args.kwargs["timeout"] == 15.0
+
+
+@patch("pubmed_markdown.abstract_from_pmid.requests.get")
+def test_reads_ncbi_api_key_from_env(mock_get, monkeypatch):
+    monkeypatch.setenv("NCBI_API_KEY", "env-key-123")
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = EFETCH_XML_RESPONSE
+    mock_resp.raise_for_status.return_value = None
+    mock_get.return_value = mock_resp
+
+    md = get_abstract_markdown_from_pmid("11111111", email="test@test.com")
+    assert md is not None
+    assert mock_get.call_args.kwargs["params"]["api_key"] == "env-key-123"
+
+
+@patch("pubmed_markdown.http_utils.time.sleep")
+@patch("pubmed_markdown.abstract_from_pmid.requests.get")
+def test_retries_on_429(mock_get, mock_sleep):
+    resp_429 = MagicMock(status_code=429, headers={"Retry-After": "2"})
+    resp_200 = MagicMock(status_code=200, text=EFETCH_XML_RESPONSE)
+    resp_200.raise_for_status.return_value = None
+    mock_get.side_effect = [resp_429, resp_200]
+
+    md = get_abstract_markdown_from_pmid("11111111", email="test@test.com")
+    assert md is not None
+    assert mock_get.call_count == 2
+    mock_sleep.assert_called_once_with(2.0)
 
 
 @patch("pubmed_markdown.abstract_from_pmid.requests.get")
