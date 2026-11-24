@@ -16,7 +16,7 @@ class PubMedMarkdown:
     Args:
         save_dir (str): Directory to save the files to (default: "data/")
         email (str, optional): Email for NCBI API identification. Falls back to NCBI_EMAIL env var.
-        api_key (str, optional): NCBI API key for E-utilities (increases rate limit from 3 to 10 req/s).
+        ncbi_key (str, optional): NCBI API key for E-utilities (increases rate limit from 3 to 10 req/s).
             Falls back to NCBI_API_KEY env var.
         request_delay (float, optional): Minimum delay in seconds between consecutive PMC requests
             in batch operations (default: 0.5).
@@ -26,13 +26,13 @@ class PubMedMarkdown:
         self,
         save_dir: str = "data",
         email: Optional[str] = None,
-        api_key: Optional[str] = None,
+        ncbi_key: Optional[str] = None,
         request_delay: Optional[float] = None,
     ):
         self.html_to_markdown = PubMedHTMLToMarkdownConverter()
         self.save_dir = save_dir
         self.email = email or os.getenv("NCBI_EMAIL")
-        self.api_key = api_key or os.getenv("NCBI_API_KEY")
+        self.ncbi_key = ncbi_key or os.getenv("NCBI_API_KEY")
         self.request_delay = 0.5 if request_delay is None else request_delay
         if not self.email:
             logger.warning(
@@ -43,7 +43,7 @@ class PubMedMarkdown:
     @property
     def _eutils_delay(self) -> float:
         """Delay between consecutive NCBI E-utilities calls (~10 req/s with key, ~3 req/s without)."""
-        return 0.15 if self.api_key else 0.4
+        return 0.15 if self.ncbi_key else 0.4
 
     def _single_pmcid_to_markdown(
         self, pmcid: str, include_supplements: bool = True
@@ -107,7 +107,7 @@ class PubMedMarkdown:
                 f"Downloading abstract only."
             )
             return get_abstract_markdown_from_pmid(
-                pmid, email=self.email, api_key=self.api_key
+                pmid, email=self.email, ncbi_key=self.ncbi_key
             )
 
         return self._single_pmcid_to_markdown(pmcid, include_supplements)
@@ -152,7 +152,7 @@ class PubMedMarkdown:
                 )
                 results.append(
                     get_abstract_markdown_from_pmid(
-                        p, email=self.email, api_key=self.api_key
+                        p, email=self.email, ncbi_key=self.ncbi_key
                     )
                 )
             else:
@@ -416,7 +416,7 @@ class PubMedMarkdown:
                     f"Downloading abstract only."
                 )
                 markdown = get_abstract_markdown_from_pmid(
-                    pmid, email=self.email, api_key=self.api_key
+                    pmid, email=self.email, ncbi_key=self.ncbi_key
                 )
                 if markdown is None:
                     logger.error(f"Failed to fetch abstract for PMID {pmid}")
@@ -437,7 +437,7 @@ def convert_pmids_from_file(
     save_dir: str = "data",
     overwrite: bool = False,
     email: Optional[str] = None,
-    api_key: Optional[str] = None,
+    ncbi_key: Optional[str] = None,
 ):
     """
     Convert pmids from a txt file to markdown
@@ -448,9 +448,9 @@ def convert_pmids_from_file(
         save_dir (str): Directory to save the files to (default: "data/")
         overwrite (bool): Whether to overwrite existing markdown files (default: False)
         email (str, optional): Email for NCBI API identification.
-        api_key (str, optional): NCBI API key for higher E-utilities rate limits.
+        ncbi_key (str, optional): NCBI API key for higher E-utilities rate limits.
     """
-    converter = PubMedMarkdown(email=email, api_key=api_key)
+    converter = PubMedMarkdown(email=email, ncbi_key=ncbi_key)
     pmids = [line.strip() for line in open(file_path, "r").readlines() if line.strip()]
     converter.pmids_to_markdown_files(pmids, save_dir, overwrite)
 
@@ -479,7 +479,7 @@ def main():
         help="Email for NCBI API identification (overrides NCBI_EMAIL env var)",
     )
     parser.add_argument(
-        "--api_key",
+        "--ncbi_key",
         type=str,
         default=None,
         help="NCBI API key for E-utilities (overrides NCBI_API_KEY env var)",
@@ -492,7 +492,7 @@ def main():
             args.save_dir,
             args.overwrite,
             email=args.email,
-            api_key=args.api_key,
+            ncbi_key=args.ncbi_key,
         )
     else:
         parser.error("--file_path is required")

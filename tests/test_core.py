@@ -403,18 +403,18 @@ def test_constructor_no_email(monkeypatch):
     assert pm.email is None
 
 
-def test_constructor_api_key_and_env(monkeypatch):
+def test_constructor_ncbi_key_and_env(monkeypatch):
     monkeypatch.setenv("NCBI_API_KEY", "env-api-key")
     pm_env = PubMedMarkdown(email="user@example.com")
-    assert pm_env.api_key == "env-api-key"
+    assert pm_env.ncbi_key == "env-api-key"
     assert pm_env._eutils_delay == 0.15
 
-    pm_explicit = PubMedMarkdown(email="user@example.com", api_key="explicit-key")
-    assert pm_explicit.api_key == "explicit-key"
+    pm_explicit = PubMedMarkdown(email="user@example.com", ncbi_key="explicit-key")
+    assert pm_explicit.ncbi_key == "explicit-key"
 
     monkeypatch.delenv("NCBI_API_KEY", raising=False)
     pm_none = PubMedMarkdown(email="user@example.com")
-    assert pm_none.api_key is None
+    assert pm_none.ncbi_key is None
     assert pm_none._eutils_delay == 0.4
 
 

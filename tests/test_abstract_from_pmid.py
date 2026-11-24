@@ -149,7 +149,7 @@ def test_api_failure(mock_get, mock_sleep):
 
 
 @patch("pubmed_markdown.abstract_from_pmid.requests.get")
-def test_passes_api_key_and_timeout(mock_get, monkeypatch):
+def test_passes_ncbi_key_and_timeout(mock_get, monkeypatch):
     monkeypatch.delenv("NCBI_API_KEY", raising=False)
     mock_resp = MagicMock()
     mock_resp.status_code = 200
@@ -158,7 +158,7 @@ def test_passes_api_key_and_timeout(mock_get, monkeypatch):
     mock_get.return_value = mock_resp
 
     md = get_abstract_markdown_from_pmid(
-        "11111111", email="test@test.com", api_key="secret-key", timeout=15.0
+        "11111111", email="test@test.com", ncbi_key="secret-key", timeout=15.0
     )
     assert md is not None
     assert mock_get.call_args.kwargs["params"]["api_key"] == "secret-key"
