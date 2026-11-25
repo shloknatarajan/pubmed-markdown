@@ -20,6 +20,8 @@ build/
 
 # data
 data/*
+docs/
+articles/
 
 # cursor
 .cursor
