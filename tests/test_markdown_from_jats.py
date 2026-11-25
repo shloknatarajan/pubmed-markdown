@@ -676,3 +676,56 @@ def test_fn_group_inside_section_and_disp_quote(converter):
     assert "The authors declare no competing interests." in md
     assert "### Author Contributions" in md
     assert "Jane Doe conceived the study." in md
+
+
+def test_title_footnote_stripping_and_string_name_references(converter):
+    """Strip <sup><xref ref-type='fn'> from titles; extract <string-name>/<collab>/<elocation-id> in refs."""
+    xml = """<article>
+      <front>
+        <article-meta>
+          <title-group>
+            <article-title>HLA-DRB1 in 10<sup>3</sup> patients<sup><xref ref-type="fn" rid="fn1">☆</xref></sup></article-title>
+          </title-group>
+          <contrib-group>
+            <contrib contrib-type="author">
+              <string-name><given-names>Alice</given-names> <surname>Smith</surname></string-name>
+            </contrib>
+          </contrib-group>
+        </article-meta>
+      </front>
+      <body><p>Body text.</p></body>
+      <back>
+        <ref-list>
+          <ref id="r1">
+            <mixed-citation>
+              <person-group>
+                <string-name><surname>Baigent</surname> <given-names>C</given-names></string-name>,
+                <string-name><surname>Keech</surname> <given-names>A</given-names></string-name>,
+                <etal>et al</etal>
+              </person-group>.
+              <article-title>Cholesterol roadmap</article-title>.
+              <source>Glob Heart</source>
+              <year>2022</year>;<volume>17</volume>:<elocation-id>75</elocation-id>.
+              <pub-id pub-id-type="doi">10.5334/gh.1154</pub-id>
+            </mixed-citation>
+          </ref>
+          <ref id="r2">
+            <element-citation>
+              <collab>WHO Working Group</collab>
+              <article-title>Global guidelines</article-title>
+              <source>WHO</source>
+              <year>2023</year>
+            </element-citation>
+          </ref>
+        </ref-list>
+      </back>
+    </article>"""
+    md = converter.convert_xml(xml)
+    assert "# HLA-DRB1 in 10^3^ patients\n" in md
+    assert "☆" not in md
+    assert "**Authors:** Alice Smith" in md
+    assert (
+        "1. Baigent C, Keech A et al. Cholesterol roadmap. *Glob Heart*. **17** (2022). 75."
+        in md
+    )
+    assert "2. WHO Working Group. Global guidelines. *WHO*. (2023)" in md

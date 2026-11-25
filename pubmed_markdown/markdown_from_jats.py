@@ -316,14 +316,16 @@ class JATSToMarkdownConverter:
         # Title
         title_tag = meta.find("article-title")
         if title_tag:
-            title_text = self._clean_text(self._inline_to_text(title_tag))
+            title_text = self._clean_text(
+                self._inline_to_text(title_tag, skip_fn_refs=True)
+            )
             if title_text:
                 metadata["title"] = title_text
 
         # Authors (individual and consortium/collab)
         authors = []
         for contrib in meta.find_all("contrib", attrs={"contrib-type": "author"}):
-            name_tag = contrib.find("name")
+            name_tag = contrib.find(["name", "string-name"])
             if name_tag:
                 given = name_tag.find("given-names")
                 surname = name_tag.find("surname")
@@ -338,6 +340,10 @@ class JATSToMarkdownConverter:
                         name_parts.append(s)
                 if name_parts:
                     authors.append(" ".join(name_parts))
+                else:
+                    raw_name = self._clean_text(name_tag.get_text())
+                    if raw_name:
+                        authors.append(raw_name)
             else:
                 collab = contrib.find("collab")
                 if collab:
@@ -950,18 +956,20 @@ class JATSToMarkdownConverter:
         """Process a JATS <p> element with inline markup (no block extraction)."""
         return self._clean_text(self._inline_to_text(p))
 
-    def _inline_element_to_text(self, child: Tag) -> str:
+    def _inline_element_to_text(self, child: Tag, skip_fn_refs: bool = False) -> str:
         """Convert a single inline JATS element to markdown text."""
         if child.name == "italic":
-            inner = self._inline_to_text(child)
+            inner = self._inline_to_text(child, skip_fn_refs=skip_fn_refs)
             return f"*{inner}*" if inner else ""
         elif child.name == "bold":
-            inner = self._inline_to_text(child)
+            inner = self._inline_to_text(child, skip_fn_refs=skip_fn_refs)
             return f"**{inner}**" if inner else ""
         elif child.name == "sub":
-            return f"_{child.get_text()}_"
+            inner = self._inline_to_text(child, skip_fn_refs=skip_fn_refs)
+            return f"_{inner}_" if inner else ""
         elif child.name == "sup":
-            return f"^{child.get_text()}^"
+            inner = self._inline_to_text(child, skip_fn_refs=skip_fn_refs)
+            return f"^{inner}^" if inner else ""
         elif child.name == "math":
             return _mathml_to_text(child)
         elif child.name == "alternatives":
@@ -977,10 +985,16 @@ class JATSToMarkdownConverter:
                     "graphic",
                     "inline-graphic",
                 ):
-                    return self._inline_element_to_text(alt_child)
+                    return self._inline_element_to_text(
+                        alt_child, skip_fn_refs=skip_fn_refs
+                    )
+            return ""
+        elif child.name == "fn" and skip_fn_refs:
             return ""
         elif child.name == "xref":
             ref_type = child.get("ref-type", "")
+            if skip_fn_refs and ref_type == "fn":
+                return ""
             text = child.get_text().strip()
             if ref_type in ("bibr", "fig", "table", "table-fn"):
                 if (
@@ -1000,9 +1014,9 @@ class JATSToMarkdownConverter:
         elif child.name in ("title", "label"):
             return ""
         else:
-            return self._inline_to_text(child)
+            return self._inline_to_text(child, skip_fn_refs=skip_fn_refs)
 
-    def _inline_to_text(self, element: Tag) -> str:
+    def _inline_to_text(self, element: Tag, skip_fn_refs: bool = False) -> str:
         """Convert JATS inline markup to markdown text."""
         parts = []
 
@@ -1012,7 +1026,9 @@ class JATSToMarkdownConverter:
             elif isinstance(child, Tag):
                 if child.name in _BLOCK_ELEMENTS:
                     continue
-                parts.append(self._inline_element_to_text(child))
+                parts.append(
+                    self._inline_element_to_text(child, skip_fn_refs=skip_fn_refs)
+                )
 
         return "".join(parts)
 
@@ -1366,9 +1382,16 @@ class JATSToMarkdownConverter:
 
         parts = []
 
-        # Authors
+        # Authors (<name>, <string-name>, or <collab>)
         authors = []
-        for name in citation.find_all("name"):
+        for name in citation.find_all(["name", "string-name", "collab"]):
+            if name.find_parent(["name", "string-name", "collab"]):
+                continue
+            if name.name == "collab":
+                collab_text = self._clean_text(name.get_text())
+                if collab_text:
+                    authors.append(collab_text)
+                continue
             surname = name.find("surname")
             given = name.find("given-names")
             if surname:
@@ -1377,6 +1400,10 @@ class JATSToMarkdownConverter:
                     author += f" {self._clean_text(given.get_text())}"
                 if author:
                     authors.append(author)
+            else:
+                raw_name = self._clean_text(name.get_text())
+                if raw_name:
+                    authors.append(raw_name)
         etal = citation.find("etal")
 
         if authors:
@@ -1408,14 +1435,17 @@ class JATSToMarkdownConverter:
         if extra:
             parts.append(" ".join(extra))
 
-        # Pages
+        # Pages (or electronic location ID when fpage is absent)
         fpage = citation.find("fpage")
         lpage = citation.find("lpage")
+        elocation = citation.find("elocation-id")
         if fpage and fpage.get_text().strip():
             page_str = self._clean_text(fpage.get_text())
             if lpage and lpage.get_text().strip():
                 page_str += f"-{self._clean_text(lpage.get_text())}"
             parts.append(page_str)
+        elif elocation and elocation.get_text().strip():
+            parts.append(self._clean_text(elocation.get_text()))
 
         # External identifier links
         links = []
