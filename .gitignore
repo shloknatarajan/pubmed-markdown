@@ -1,6 +1,6 @@
 
-# pixi environments
-.pixi
+# virtual environments
+.venv/
 *.egg-info
 
 # environment files

@@ -157,6 +157,27 @@ All methods accepting IDs take either a single string or a list of strings.
 | `NCBI_EMAIL` | None | Email for NCBI API identification |
 | `NCBI_API_KEY` | None | Optional NCBI API key (increases E-utilities rate limit from 3 to 10 req/s) |
 
+## Development
+
+This project uses [uv](https://docs.astral.sh/uv/) for environment management, testing, and publishing:
+
+```bash
+# Install dependencies (including dev tools and API server extras)
+uv sync --all-extras
+
+# Run tests
+uv run pytest
+
+# Format code
+uv run black pubmed_markdown/ tests/ api.py
+
+# Run the FastAPI server locally
+uv run --extra api uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+
+# Build and publish a release to PyPI
+rm -rf dist/ && uv build && uv publish
+```
+
 ## License
 
 MIT
