@@ -40,10 +40,10 @@ def parse_markdown_metadata(markdown_text: str) -> dict:
     # Dictionary to store extracted metadata
     metadata = {}
 
-    # Regular expressions for extraction
-    pmcid_pattern = r"\*\*PMCID:\*\*\s*([^\n]+)"
-    pmid_pattern = r"\*\*PMID:\*\*\s*([^\n]+)"
-    url_pattern = r"\*\*URL:\*\*\s*([^\n]+)"
+    # Regular expressions for extraction (supports both full-text **PMID:** and abstract-only PMID:)
+    pmcid_pattern = r"(?:\*\*PMCID:\*\*|PMCID:)\s*([^\n]+)"
+    pmid_pattern = r"(?:\*\*PMID:\*\*|PMID:)\s*([^\n]+)"
+    url_pattern = r"(?:\*\*URL:\*\*|URL:)\s*([^\n]+)"
 
     # Extract PMCID
     pmcid_match = re.search(pmcid_pattern, markdown_text)
@@ -110,14 +110,14 @@ def create_records() -> pd.DataFrame:
                 "markdown_path": f"{markdown_path}/{file}",
                 "url": None,
             }
-            metadata = parse_markdown_metadata(
-                open(f"{markdown_path}/{file}", "r").read()
-            )
-            if metadata["pmid"] is not None:
+            file_path = os.path.join(markdown_path, file)
+            with open(file_path, "r", encoding="utf-8") as f:
+                metadata = parse_markdown_metadata(f.read())
+            if metadata.get("pmid") is not None:
                 row["pmid"] = metadata["pmid"]
-            if metadata["pmcid"] is not None:
+            if metadata.get("pmcid") is not None:
                 row["pmcid"] = metadata["pmcid"]
-            if metadata["url"] is not None:
+            if metadata.get("url") is not None:
                 row["url"] = metadata["url"]
             records.append(row)
 

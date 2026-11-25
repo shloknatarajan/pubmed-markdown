@@ -66,7 +66,7 @@ def test_url_format(mock_get):
 
     get_html_from_pmcid("PMC7654321")
     url = mock_get.call_args[0][0]
-    assert url == "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7654321/?report=classic"
+    assert url == "https://pmc.ncbi.nlm.nih.gov/articles/PMC7654321/?report=classic"
     assert mock_get.call_args.kwargs["timeout"] == 30.0
 
 

@@ -9,6 +9,7 @@ in pubmed_html_to_markdown_conversion_process.md
 
 import re
 import html
+import threading
 from typing import Dict
 from bs4 import BeautifulSoup, Tag, NavigableString
 from loguru import logger
@@ -18,11 +19,19 @@ from .table_utils import convert_table_to_markdown
 
 
 class PubMedHTMLToMarkdownConverter:
-    """Converts PubMed/PMC HTML articles to markdown format."""
+    """Converts PubMed/PMC HTML articles to markdown format (thread-safe)."""
 
     def __init__(self):
-        self.soup = None
+        self._local = threading.local()
         self.base_url = "https://pmc.ncbi.nlm.nih.gov"
+
+    @property
+    def soup(self):
+        return getattr(self._local, "soup", None)
+
+    @soup.setter
+    def soup(self, value):
+        self._local.soup = value
 
     def convert_file(self, html_file_path: str) -> str:
         """

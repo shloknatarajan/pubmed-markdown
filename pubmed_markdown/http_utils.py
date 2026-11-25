@@ -5,6 +5,7 @@ Retry-After parsing, and AWS WAF / CAPTCHA HTML detection.
 
 import random
 import re
+import threading
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -18,6 +19,19 @@ DEFAULT_MAX_RETRIES: int = 2
 DEFAULT_BACKOFF_FACTOR: float = 1.0
 MAX_RETRY_AFTER: float = 60.0
 RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
+
+_ORIG_REQUESTS_GET = requests.get
+_thread_local = threading.local()
+
+
+def get_http_session() -> requests.Session:
+    """Return a thread-local requests.Session for HTTP keep-alive connection pooling."""
+    session = getattr(_thread_local, "session", None)
+    if session is None:
+        session = requests.Session()
+        _thread_local.session = session
+    return session
+
 
 _PMC_ARTICLE_RE = re.compile(
     r"(?:name=[\"'](?:citation_title|ncbi_type)[\"']"
@@ -150,10 +164,15 @@ def get_with_retries(
 
     label = f" ({context})" if context else ""
     attempts = max(1, max_retries + 1)
+    # Use thread-local pooled Session for real unpatched requests.get calls,
+    # while honoring patched mocks (e.g. unittest.mock.patch("...requests.get")).
+    effective_request_fn = (
+        get_http_session().get if request_fn is _ORIG_REQUESTS_GET else request_fn
+    )
 
     for attempt in range(attempts):
         try:
-            response = request_fn(url, **kwargs)
+            response = effective_request_fn(url, **kwargs)
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
             if attempt < attempts - 1:
                 delay = compute_backoff(attempt, backoff_factor=backoff_factor)

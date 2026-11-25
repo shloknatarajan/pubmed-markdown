@@ -7,12 +7,30 @@ from .utils_bioc import format_supplement_as_markdown
 from .abstract_from_pmid import get_abstract_markdown_from_pmid
 from typing import List, Optional, Tuple, Union
 import os
+import re
 from loguru import logger
 from tqdm import tqdm
 import argparse
 import time
 
 VALID_SOURCES = ("auto", "xml_first", "html_first", "xml", "html")
+
+_EXISTING_SUPP_HEADING_RE = re.compile(
+    r"^##\s+(?:electronic\s+)?(?:supplementary|supporting)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _append_supplement_or_placeholder(markdown: str, supplement: Optional[str]) -> str:
+    """Append BioC supplement text, or a placeholder only if no supplement section exists."""
+    if supplement:
+        return markdown.rstrip() + "\n\n" + supplement + "\n"
+    if _EXISTING_SUPP_HEADING_RE.search(markdown):
+        return markdown.rstrip() + "\n"
+    return (
+        markdown.rstrip()
+        + "\n\n## Supplementary Materials\n\nNo supplementary materials found.\n"
+    )
 
 
 class PubMedMarkdown:
@@ -190,13 +208,18 @@ class PubMedMarkdown:
         return results
 
     def _single_pmid_to_markdown(
-        self, pmid: str, include_supplements: bool = True
+        self,
+        pmid: str,
+        include_supplements: bool = True,
+        fallback_to_abstract: bool = True,
     ) -> Optional[str]:
         """Convert a single PMID to markdown. Internal helper."""
         pmcid_mapping = get_pmcid_from_pmid([pmid], email=self.email)
         pmcid = pmcid_mapping.get(str(pmid).strip())
 
         if pmcid is None:
+            if not fallback_to_abstract:
+                return None
             logger.warning(
                 f"PMID {pmid} is not available on PubMed Central (Open Access). "
                 f"Downloading abstract only."
@@ -205,27 +228,46 @@ class PubMedMarkdown:
                 pmid, email=self.email, ncbi_key=self.ncbi_key
             )
 
-        return self._single_pmcid_to_markdown(pmcid, include_supplements)
+        full_md = self._single_pmcid_to_markdown(pmcid, include_supplements)
+        if full_md is not None:
+            return full_md
+
+        if fallback_to_abstract:
+            logger.warning(
+                f"Full text unavailable for PMID {pmid} ({pmcid}); "
+                f"falling back to abstract only."
+            )
+            return get_abstract_markdown_from_pmid(
+                pmid, email=self.email, ncbi_key=self.ncbi_key
+            )
+        return None
 
     def pmid_to_markdown(
         self,
         pmid: Union[str, List[str]],
         include_supplements: bool = True,
+        fallback_to_abstract: bool = True,
     ) -> Union[Optional[str], List[Optional[str]]]:
         """
         Convert one or more PMIDs to markdown (returned as strings, not saved to disk).
-        Falls back to abstract-only if no PMCID is available.
+        Falls back to abstract-only if no PMCID is available or full text cannot be fetched
+        (when `fallback_to_abstract=True`).
 
         Args:
             pmid (str or List[str]): A single PMID or list of PMIDs
             include_supplements (bool): Whether to append supplementary materials (default: True)
+            fallback_to_abstract (bool): Fall back to PubMed abstract when full text is unavailable (default: True)
 
         Returns:
             If a single PMID string was passed: Optional[str] — the markdown or None.
             If a list was passed: List[Optional[str]] — one result per input PMID.
         """
         if isinstance(pmid, str):
-            return self._single_pmid_to_markdown(pmid, include_supplements)
+            return self._single_pmid_to_markdown(
+                pmid,
+                include_supplements=include_supplements,
+                fallback_to_abstract=fallback_to_abstract,
+            )
 
         normalized_pmids = [str(p).strip() for p in pmid]
         pmcid_mapping = get_pmcid_from_pmid(normalized_pmids, email=self.email)
@@ -241,6 +283,9 @@ class PubMedMarkdown:
                     time.sleep(delay)
 
             if pmcid is None:
+                if not fallback_to_abstract:
+                    results.append(None)
+                    continue
                 logger.warning(
                     f"PMID {p} is not available on PubMed Central (Open Access). "
                     f"Downloading abstract only."
@@ -251,9 +296,16 @@ class PubMedMarkdown:
                     )
                 )
             else:
-                results.append(
-                    self._single_pmcid_to_markdown(pmcid, include_supplements)
-                )
+                full_md = self._single_pmcid_to_markdown(pmcid, include_supplements)
+                if full_md is None and fallback_to_abstract:
+                    logger.warning(
+                        f"Full text unavailable for PMID {p} ({pmcid}); "
+                        f"falling back to abstract only."
+                    )
+                    full_md = get_abstract_markdown_from_pmid(
+                        p, email=self.email, ncbi_key=self.ncbi_key
+                    )
+                results.append(full_md)
 
         return results
 
@@ -314,7 +366,7 @@ class PubMedMarkdown:
             logger.warning(f"No HTML directory found at {html_dir}")
             return
 
-        htmls = os.listdir(html_dir)
+        htmls = [f for f in os.listdir(html_dir) if f.endswith(".html")]
         html_paths = [os.path.join(html_dir, f) for f in htmls]
 
         if not overwrite:
@@ -322,12 +374,11 @@ class PubMedMarkdown:
             existing_markdown = self.check_existing_markdown_pmcids(save_dir)
             logger.info(f"Found {len(existing_markdown)} existing markdown files")
             # Filter out HTML files that already have markdown
-            htmls = [
-                html
-                for html in htmls
-                if html.replace(".html", "") not in existing_markdown
-            ]
+            htmls = [html for html in htmls if html[:-5] not in existing_markdown]
             html_paths = [os.path.join(html_dir, f) for f in htmls]
+
+        markdown_dir = os.path.join(save_dir, "markdown")
+        os.makedirs(markdown_dir, exist_ok=True)
 
         logger.info(f"Converting {len(htmls)} HTML files to Markdown")
         for html_path in tqdm(
@@ -340,22 +391,12 @@ class PubMedMarkdown:
                 continue
 
             # Append supplementary materials
-            pmcid = os.path.basename(html_path).replace(".html", "")
+            pmcid = os.path.basename(html_path)[:-5]
             supplement = format_supplement_as_markdown(pmcid)
-            if supplement:
-                markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
-            else:
-                markdown = (
-                    markdown.rstrip()
-                    + "\n\n## Supplementary Materials\n\nNo supplementary materials found.\n"
-                )
+            markdown = _append_supplement_or_placeholder(markdown, supplement)
 
-            md_path = os.path.join(
-                save_dir,
-                "markdown",
-                f"{os.path.basename(html_path).replace('.html', '.md')}",
-            )
-            with open(md_path, "w") as f:
+            md_path = os.path.join(markdown_dir, f"{pmcid}.md")
+            with open(md_path, "w", encoding="utf-8") as f:
                 f.write(markdown)
 
     def pmids_to_pmcids(
@@ -432,7 +473,7 @@ class PubMedMarkdown:
             # Save HTML
             try:
                 html_path = os.path.join(html_dir, f"{pmcid}.html")
-                with open(html_path, "w") as f:
+                with open(html_path, "w", encoding="utf-8") as f:
                     f.write(html_text)
             except Exception as e:
                 logger.error(f"Error saving HTML for PMCID {pmcid}: {str(e)}")
@@ -473,19 +514,22 @@ class PubMedMarkdown:
             else:
                 pmids_without_pmcid.append(pmid)
 
-        valid_pmcids = [pmcid for _, pmcid in pmids_with_pmcid]
-
+        existing_markdown: List[str] = []
         if not overwrite:
             existing_markdown = self.check_existing_markdown_pmcids(save_dir)
             logger.info(f"Found {len(existing_markdown)} existing markdown files")
-            valid_pmcids = [
-                pmcid for pmcid in valid_pmcids if pmcid not in existing_markdown
+            pmids_with_pmcid = [
+                (pmid, pmcid)
+                for pmid, pmcid in pmids_with_pmcid
+                if pmcid not in existing_markdown
             ]
             pmids_without_pmcid = [
                 pmid
                 for pmid in pmids_without_pmcid
                 if f"PMID{pmid}" not in existing_markdown
             ]
+
+        valid_pmcids = [pmcid for _, pmcid in pmids_with_pmcid]
 
         # Full-text path
         logger.info(
@@ -494,18 +538,34 @@ class PubMedMarkdown:
         if self.source == "html":
             self.pmcids_to_html(valid_pmcids, save_dir)
             self.local_html_to_markdown(save_dir, overwrite=overwrite)
-        elif valid_pmcids:
+            # Queue any PMCIDs whose HTML fetch/conversion failed for abstract fallback
+            converted_after = set(self.check_existing_markdown_pmcids(save_dir))
+            for pmid, pmcid in pmids_with_pmcid:
+                if pmcid not in converted_after and (
+                    overwrite or f"PMID{pmid}" not in converted_after
+                ):
+                    logger.warning(
+                        f"Full text unavailable for PMID {pmid} ({pmcid}); "
+                        f"queuing abstract fallback."
+                    )
+                    pmids_without_pmcid.append(pmid)
+        elif pmids_with_pmcid:
             markdown_dir = os.path.join(save_dir, "markdown")
             os.makedirs(markdown_dir, exist_ok=True)
-            for idx, pmcid in enumerate(
-                tqdm(valid_pmcids, desc="Converting PMCIDs to Markdown")
+            for idx, (pmid, pmcid) in enumerate(
+                tqdm(pmids_with_pmcid, desc="Converting PMCIDs to Markdown")
             ):
                 if idx > 0 and self.request_delay > 0:
                     time.sleep(self.request_delay)
 
                 fetched = self._fetch_pmcid_markdown(pmcid)
                 if fetched is None:
-                    logger.error(f"Failed to fetch full text for PMCID {pmcid}")
+                    logger.warning(
+                        f"Failed to fetch full text for PMID {pmid} ({pmcid}); "
+                        f"queuing abstract fallback."
+                    )
+                    if overwrite or f"PMID{pmid}" not in existing_markdown:
+                        pmids_without_pmcid.append(pmid)
                     continue
 
                 markdown, fmt, raw_content = fetched
@@ -520,22 +580,16 @@ class PubMedMarkdown:
                     logger.warning(f"Error saving raw {fmt} for {pmcid}: {e}")
 
                 supplement = format_supplement_as_markdown(pmcid)
-                if supplement:
-                    markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
-                else:
-                    markdown = (
-                        markdown.rstrip()
-                        + "\n\n## Supplementary Materials\n\nNo supplementary materials found.\n"
-                    )
+                markdown = _append_supplement_or_placeholder(markdown, supplement)
 
                 md_path = os.path.join(markdown_dir, f"{pmcid}.md")
                 with open(md_path, "w", encoding="utf-8") as f:
                     f.write(markdown)
 
-        # Abstract fallback for PMIDs without PMCIDs
+        # Abstract fallback for PMIDs without PMCIDs (or whose full-text fetch failed)
         if pmids_without_pmcid:
             logger.info(
-                f"{len(pmids_without_pmcid)} PMIDs have no PMCID (not open access). "
+                f"{len(pmids_without_pmcid)} PMIDs without full text. "
                 f"Fetching abstracts only."
             )
             markdown_dir = os.path.join(save_dir, "markdown")
@@ -547,7 +601,7 @@ class PubMedMarkdown:
                 if idx > 0 and self._eutils_delay > 0:
                     time.sleep(self._eutils_delay)
                 logger.warning(
-                    f"PMID {pmid} is not available on PubMed Central (Open Access). "
+                    f"PMID {pmid} full text not available on PubMed Central. "
                     f"Downloading abstract only."
                 )
                 markdown = get_abstract_markdown_from_pmid(
@@ -557,13 +611,10 @@ class PubMedMarkdown:
                     logger.error(f"Failed to fetch abstract for PMID {pmid}")
                     continue
 
-                markdown = (
-                    markdown.rstrip()
-                    + "\n\n## Supplementary Materials\n\nNo supplementary materials found.\n"
-                )
+                markdown = _append_supplement_or_placeholder(markdown, None)
 
                 md_path = os.path.join(markdown_dir, f"PMID{pmid}.md")
-                with open(md_path, "w") as f:
+                with open(md_path, "w", encoding="utf-8") as f:
                     f.write(markdown)
 
 
@@ -588,7 +639,8 @@ def convert_pmids_from_file(
         source (str): Full-text fetching strategy (default: "auto").
     """
     converter = PubMedMarkdown(email=email, ncbi_key=ncbi_key, source=source)
-    pmids = [line.strip() for line in open(file_path, "r").readlines() if line.strip()]
+    with open(file_path, "r", encoding="utf-8") as f:
+        pmids = [line.strip() for line in f if line.strip()]
     converter.pmids_to_markdown_files(pmids, save_dir, overwrite)
 
 

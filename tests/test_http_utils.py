@@ -168,3 +168,24 @@ def test_validation_failure_retries_and_raises_waf_error(mock_sleep):
 
     assert request_fn.call_count == 3
     assert mock_sleep.call_count == 2
+
+
+def test_get_http_session_is_reused_per_thread():
+    import threading
+    from pubmed_markdown.http_utils import get_http_session
+
+    s1 = get_http_session()
+    s2 = get_http_session()
+    assert s1 is s2
+    assert isinstance(s1, requests.Session)
+
+    other = []
+
+    def worker():
+        other.append(get_http_session())
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+    assert len(other) == 1
+    assert other[0] is not s1

@@ -3,7 +3,6 @@ requests>=2.32.3,<3
 loguru>=0.7.3,<0.8
 pandas>=2.2.3,<3
 tqdm>=4.67.1,<5
-biopython>=1.85,<2
 beautifulsoup4>=4.13.4,<5
 lxml>=4.9.0,<7
 fastapi>=0.115,<1

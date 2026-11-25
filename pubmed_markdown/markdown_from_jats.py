@@ -234,9 +234,6 @@ def _mathml_to_text(node: Tag) -> str:
 class JATSToMarkdownConverter:
     """Converts JATS XML from NCBI E-utilities / Europe PMC to markdown format."""
 
-    def __init__(self):
-        self.soup = None
-
     def convert_file(self, xml_file_path: str) -> str:
         """
         Convert a JATS XML file on disk to a markdown string.
@@ -261,9 +258,9 @@ class JATSToMarkdownConverter:
         Returns:
             The markdown content, or empty string if no <article> element exists.
         """
-        self.soup = BeautifulSoup(xml_content, "xml")
+        soup = BeautifulSoup(xml_content, "xml")
 
-        article = self.soup.find("article")
+        article = soup.find("article")
         if not article:
             logger.warning("No <article> element found in XML")
             return ""

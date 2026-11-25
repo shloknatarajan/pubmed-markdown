@@ -582,3 +582,122 @@ def test_pmids_to_markdown_files_auto_uses_xml_and_saves_raw(
     )
     assert (tmp_path / "markdown" / "PMID222.md").exists()
     mock_html.assert_not_called()
+
+
+@patch("pubmed_markdown.core.get_abstract_markdown_from_pmid")
+@patch("pubmed_markdown.core.get_html_from_pmcid")
+@patch("pubmed_markdown.core.get_xml_from_pmcid")
+@patch("pubmed_markdown.core.get_pmcid_from_pmid")
+def test_pmid_falls_back_to_abstract_when_pmcid_full_text_blocked(
+    mock_pmcid, mock_xml, mock_html, mock_abstract
+):
+    """When a PMCID exists but XML is restricted and HTML is 403, fall back to abstract."""
+    mock_pmcid.return_value = {"11111111": "PMC5555555"}
+    mock_xml.return_value = None
+    mock_html.return_value = None
+    mock_abstract.return_value = (
+        "# Abstract Fallback\n\nPMID: 11111111\n\n## Abstract\n\nText."
+    )
+
+    pm = PubMedMarkdown(email="test@test.com", source="auto")
+    md = pm.pmid_to_markdown("11111111")
+    assert md is not None
+    assert "# Abstract Fallback" in md
+
+    # Opting out of fallback returns None
+    md_strict = pm.pmid_to_markdown("11111111", fallback_to_abstract=False)
+    assert md_strict is None
+
+
+@patch("pubmed_markdown.core.get_abstract_markdown_from_pmid")
+@patch("pubmed_markdown.core.format_supplement_as_markdown")
+@patch("pubmed_markdown.core.get_html_from_pmcid")
+@patch("pubmed_markdown.core.get_xml_from_pmcid")
+@patch("pubmed_markdown.core.get_pmcid_from_pmid")
+def test_pmids_to_markdown_files_falls_back_to_abstract_on_pmcid_failure(
+    mock_pmcid, mock_xml, mock_html, mock_supp, mock_abstract, tmp_path
+):
+    """Batch file export saves PMID<id>.md abstract if full-text fetch fails for a PMCID."""
+    mock_pmcid.return_value = {"111": "PMC_RESTRICTED"}
+    mock_xml.return_value = None
+    mock_html.return_value = None
+    mock_abstract.return_value = (
+        "# Restricted Fallback\n\nPMID: 111\n\n## Abstract\n\nText."
+    )
+
+    pm = PubMedMarkdown(save_dir=str(tmp_path), email="test@test.com", source="auto")
+    pm.pmids_to_markdown_files(["111"], save_dir=str(tmp_path))
+
+    assert not (tmp_path / "markdown" / "PMC_RESTRICTED.md").exists()
+    assert (tmp_path / "markdown" / "PMID111.md").exists()
+    assert "Restricted Fallback" in (tmp_path / "markdown" / "PMID111.md").read_text()
+
+
+@patch("pubmed_markdown.core.format_supplement_as_markdown")
+@patch("pubmed_markdown.core.get_xml_from_pmcid")
+@patch("pubmed_markdown.core.get_pmcid_from_pmid")
+def test_no_duplicate_supplement_placeholder_when_jats_has_supporting_info(
+    mock_pmcid, mock_xml, mock_supp, tmp_path
+):
+    xml_with_supp = """<article xmlns:xlink="http://www.w3.org/1999/xlink">
+      <front><article-meta><title-group><article-title>With Supp</article-title></title-group></article-meta></front>
+      <body>
+        <sec><title>Intro</title><p>Text.</p></sec>
+        <sec>
+          <title>Supporting information</title>
+          <supplementary-material><media xlink:href="table_s1.xlsx"/></supplementary-material>
+        </sec>
+      </body>
+    </article>"""
+    mock_pmcid.return_value = {"111": "PMC999"}
+    mock_xml.return_value = xml_with_supp
+    mock_supp.return_value = None
+
+    pm = PubMedMarkdown(save_dir=str(tmp_path), email="test@test.com", source="xml")
+    pm.pmids_to_markdown_files(["111"], save_dir=str(tmp_path))
+
+    md_text = (tmp_path / "markdown" / "PMC999.md").read_text(encoding="utf-8")
+    assert "## Supporting information" in md_text
+    assert "No supplementary materials found." not in md_text
+
+
+@patch("pubmed_markdown.core.format_supplement_as_markdown")
+def test_local_html_to_markdown_ignores_non_html_and_creates_dir(mock_supp, tmp_path):
+    """Ignores stray files like .DS_Store and auto-creates markdown/ directory."""
+    mock_supp.return_value = None
+    html_dir = tmp_path / "html"
+    html_dir.mkdir()
+    (html_dir / ".DS_Store").write_bytes(b"\x00\x01\x02")
+    (html_dir / "PMC123.html").write_text(SAMPLE_HTML, encoding="utf-8")
+
+    pm = PubMedMarkdown(email="test@test.com")
+    pm.local_html_to_markdown(save_dir=str(tmp_path))
+
+    assert (tmp_path / "markdown" / "PMC123.md").exists()
+    assert not (tmp_path / "markdown" / ".DS_Store.md").exists()
+
+
+def test_manage_records_handles_abstract_only_files_without_keyerror(
+    tmp_path, monkeypatch
+):
+    """parse_markdown_metadata and create_records handle missing PMCID/URL gracefully."""
+    from pubmed_markdown.manage_records import create_records, parse_markdown_metadata
+
+    abstract_md = "# Title\n\nPMID: 123456\n\n## Abstract\n\nText.\n"
+    meta = parse_markdown_metadata(abstract_md)
+    assert meta["pmid"] == "123456"
+    assert "pmcid" not in meta
+
+    data_dir = tmp_path / "data"
+    md_dir = data_dir / "markdown"
+    md_dir.mkdir(parents=True)
+    (md_dir / "PMID123456.md").write_text(abstract_md, encoding="utf-8")
+    (md_dir / "PMC999.md").write_text(
+        "**PMID:** 999\n**PMCID:** PMC999\n**URL:** https://pmc.ncbi.nlm.nih.gov/articles/PMC999/\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    df = create_records()
+    assert len(df) == 2
+    assert set(df["pmid"].astype(str)) == {"123456", "999"}

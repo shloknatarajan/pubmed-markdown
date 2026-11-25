@@ -16,6 +16,8 @@ from loguru import logger
 from .http_utils import DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT, get_with_retries
 
 BIOC_BASE_URL = "https://www.ncbi.nlm.nih.gov/research/bionlp/RESTful/supplmat.cgi"
+BIOC_ENRICHMENT_TIMEOUT: float = 15.0
+BIOC_ENRICHMENT_MAX_RETRIES: int = 1
 
 
 def fetch_bioc_supplement(
@@ -140,16 +142,19 @@ def _extract_text_from_bioc(data: list | dict) -> str:
 
 def format_supplement_as_markdown(
     pmcid: str,
-    timeout: float = DEFAULT_TIMEOUT,
-    max_retries: int = DEFAULT_MAX_RETRIES,
+    timeout: float = BIOC_ENRICHMENT_TIMEOUT,
+    max_retries: int = BIOC_ENRICHMENT_MAX_RETRIES,
 ) -> str | None:
     """
     Fetch supplementary material for a PMCID and format it as a markdown section.
 
+    Uses a shorter default timeout (15s) and 1 retry so BioC outages don't stall
+    full-text article conversion.
+
     Args:
         pmcid: PubMed Central ID (e.g., "PMC6435416")
-        timeout: HTTP request timeout in seconds (default: 30.0)
-        max_retries: Number of retry attempts for transient errors (default: 2)
+        timeout: HTTP request timeout in seconds (default: 15.0)
+        max_retries: Number of retry attempts for transient errors (default: 1)
 
     Returns:
         A formatted markdown string with ## Supplementary Materials header,

@@ -38,7 +38,7 @@ def get_html_from_pmcid(
     """
     Given a PMCID, fetch the full article text from the NCBI website.
     Returns the HTML text of the article in string format from the url
-    https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/?report=classic
+    https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/?report=classic
 
     Args:
         pmcid (str): The PMCID to fetch
@@ -67,7 +67,7 @@ def get_html_from_pmcid(
         "User-Agent": user_agent,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
-    url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/?report=classic"
+    url = f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/?report=classic"
     response = None
     try:
         response = get_with_retries(

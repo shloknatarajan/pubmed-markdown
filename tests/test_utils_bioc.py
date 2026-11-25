@@ -169,3 +169,15 @@ def test_format_supplement_none_when_unavailable(mock_get):
 
     md = format_supplement_as_markdown("PMC0000")
     assert md is None
+    assert mock_get.call_args.kwargs["timeout"] == 15.0
+
+
+@patch("pubmed_markdown.http_utils.time.sleep")
+@patch("pubmed_markdown.utils_bioc.requests.get")
+def test_format_supplement_uses_bounded_enrichment_retries(mock_get, mock_sleep):
+    import requests
+
+    mock_get.side_effect = requests.exceptions.Timeout("slow")
+    assert format_supplement_as_markdown("PMC1234") is None
+    # 1 initial attempt + 1 retry = 2 total (fast enrichment failure)
+    assert mock_get.call_count == 2
