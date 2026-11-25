@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup, Tag, NavigableString
 from loguru import logger
 
 from .http_utils import is_waf_or_captcha_html
+from .table_utils import convert_table_to_markdown
 
 
 class PubMedHTMLToMarkdownConverter:
@@ -426,118 +427,7 @@ class PubMedHTMLToMarkdownConverter:
 
     def _convert_table_to_markdown(self, table_tag: Tag) -> str:
         """Convert HTML table to markdown table."""
-        rows = []
-        max_cols = 0
-
-        # Process header
-        thead = table_tag.find("thead")
-        header_rows = []
-        if thead:
-            header_rows = thead.find_all("tr")
-            for row in header_rows:
-                cells = row.find_all(["th", "td"])
-                row_data = []
-                for cell in cells:
-                    # Handle colspan
-                    colspan = int(cell.get("colspan", 1))
-                    text = self._clean_text(cell.get_text()).strip()
-                    # Escape pipe characters and clean up text
-                    text = text.replace("|", "\\|").replace("\n", " ")
-                    # Handle empty cells
-                    if not text:
-                        text = " "
-                    row_data.append(text)
-                    # Add empty cells for colspan > 1
-                    for _ in range(colspan - 1):
-                        row_data.append("")
-                rows.append(row_data)
-                max_cols = max(max_cols, len(row_data))
-
-        # Process body
-        tbody = table_tag.find("tbody")
-        if tbody:
-            body_rows = tbody.find_all("tr")
-        else:
-            # No explicit tbody, get all tr elements
-            body_rows = table_tag.find_all("tr")
-            if header_rows:
-                # Remove header rows if we already processed them
-                body_rows = body_rows[len(header_rows) :]
-
-        for row in body_rows:
-            cells = row.find_all(["td", "th"])
-            row_data = []
-            for cell in cells:
-                # Handle colspan (markdown doesn't support rowspan)
-                colspan = int(cell.get("colspan", 1))
-                text = self._clean_text(cell.get_text()).strip()
-                # Escape pipe characters and clean up text
-                text = text.replace("|", "\\|").replace("\n", " ")
-                # Handle empty cells
-                if not text:
-                    text = " "
-                row_data.append(text)
-                # Add empty cells for colspan > 1
-                for _ in range(colspan - 1):
-                    row_data.append("")
-            rows.append(row_data)
-            max_cols = max(max_cols, len(row_data))
-
-        if not rows:
-            return ""
-
-        # Normalize all rows to have same number of columns
-        for row in rows:
-            while len(row) < max_cols:
-                row.append("")
-
-        # Convert to markdown
-        lines = []
-
-        if rows:
-            # Determine if we have proper headers
-            has_proper_header = thead and header_rows
-
-            if has_proper_header:
-                header = rows[0]
-                data_rows = rows[1:]
-            else:
-                # For tables without proper headers, use first row if it looks like headers
-                # Otherwise create generic headers
-                first_row = rows[0]
-                # Check if first row looks like headers (contains non-numeric text)
-                if any(
-                    not cell.replace(".", "").replace("-", "").isdigit()
-                    and cell.strip()
-                    for cell in first_row
-                ):
-                    header = first_row
-                    data_rows = rows[1:]
-                else:
-                    # Create descriptive headers based on content patterns
-                    header = []
-                    for i in range(max_cols):
-                        if i == 0:
-                            header.append("Category")
-                        else:
-                            header.append(f"Value {i}")
-                    data_rows = rows
-
-            # Header row
-            lines.append("| " + " | ".join(header) + " |")
-
-            # Separator row - use consistent width for better formatting
-            separator_cols = ["---"] * len(header)
-            lines.append("| " + " | ".join(separator_cols) + " |")
-
-            # Data rows
-            for row in data_rows:
-                # Ensure row has same length as header
-                while len(row) < len(header):
-                    row.append("")
-                lines.append("| " + " | ".join(row[: len(header)]) + " |")
-
-        return "\n".join(lines)
+        return convert_table_to_markdown(table_tag, infer_headers=True)
 
     def _process_figure(self, figure_tag: Tag) -> str:
         """Process figure element."""

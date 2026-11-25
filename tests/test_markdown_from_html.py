@@ -289,6 +289,49 @@ def test_table_colspan(converter):
     assert "| A | B | C |" in md
 
 
+def test_table_rowspan_and_multirow_thead(converter):
+    html = """
+    <html><head><title>Test</title></head><body>
+    <section class="main-article-body">
+        <section id="sec1">
+            <table>
+                <thead>
+                    <tr><th rowspan="2">Gene</th><th colspan="2">Cohort</th></tr>
+                    <tr><th>Cases</th><th>Controls</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td rowspan="2">DCK</td><td>10</td><td>20</td></tr>
+                    <tr><td>15</td><td>25</td></tr>
+                </tbody>
+            </table>
+        </section>
+    </section>
+    </body></html>
+    """
+    md = converter.convert_html(html)
+    assert "| Gene | Cohort - Cases | Cohort - Controls |" in md
+    assert "| DCK | 10 | 20 |" in md
+    assert "|  | 15 | 25 |" in md
+
+
+def test_table_br_cell_spacing(converter):
+    html = """
+    <html><head><title>Test</title></head><body>
+    <section class="main-article-body">
+        <section id="sec1">
+            <table>
+                <thead><tr><th>Risk<br>OR (95% CI)</th></tr></thead>
+                <tbody><tr><td>Line 1<br>Line 2</td></tr></tbody>
+            </table>
+        </section>
+    </section>
+    </body></html>
+    """
+    md = converter.convert_html(html)
+    assert "| Risk OR (95% CI) |" in md
+    assert "| Line 1 Line 2 |" in md
+
+
 def test_table_pipe_escaping(converter):
     html = """
     <html><head><title>Test</title></head><body>

@@ -352,3 +352,327 @@ def test_formatting_quirk_fixes(converter):
     assert ".jpg.jpg" not in md
     assert "1. Teo K.K., Rafiq T. Risk Factors. *Can. J. Cardiol.* **37** (2021)." in md
     assert ".." not in md
+
+
+def test_table_rowspan_multirow_thead_and_break_spacing(converter):
+    """rowspan > 1, multi-row thead merging, and <break/> cell spacing."""
+    xml = """<article>
+      <body>
+        <table-wrap>
+          <label>Table 1</label>
+          <table>
+            <thead>
+              <tr>
+                <th rowspan="2">Characteristic</th>
+                <th colspan="2">No. of patients (%)</th>
+                <th rowspan="2">Toxicity risk<break/>OR (± 95% CI)</th>
+              </tr>
+              <tr>
+                <th>Ex-case (n=144)</th>
+                <th>Ex-control (n=144)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td rowspan="2">ANEMIA<break/>grade 1-2</td>
+                <td>21 (7.9)</td>
+                <td>--</td>
+                <td>1.00 (ref)</td>
+              </tr>
+              <tr>
+                <td>87 (32.8)</td>
+                <td>3 (11.5)</td>
+                <td>1.61 (0.37-6.94)</td>
+              </tr>
+            </tbody>
+          </table>
+        </table-wrap>
+      </body>
+    </article>"""
+    md = converter.convert_xml(xml)
+    assert (
+        "| Characteristic | No. of patients (%) - Ex-case (n=144) "
+        "| No. of patients (%) - Ex-control (n=144) | Toxicity risk OR (± 95% CI) |"
+        in md
+    )
+    assert "| ANEMIA grade 1-2 | 21 (7.9) | -- | 1.00 (ref) |" in md
+    # Row 2 must stay aligned under cols 1-3 with empty col 0 (not shifted left)
+    assert "|  | 87 (32.8) | 3 (11.5) | 1.61 (0.37-6.94) |" in md
+
+
+def test_table_cell_breaks_preserve_inline_sub_sup(converter):
+    """<break/> and <p> insert spaces, while <sub>/<sup>/<italic> stay contiguous."""
+    xml = """<article>
+      <body>
+        <table-wrap>
+          <table>
+            <thead><tr><th>Formula</th><th>Gene</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>H<sub>2</sub>O<break/>10<sup>3</sup></td>
+                <td><p><italic>ERCC1</italic> p.Asn118=</p><p>rs11615</p></td>
+              </tr>
+            </tbody>
+          </table>
+        </table-wrap>
+      </body>
+    </article>"""
+    md = converter.convert_xml(xml)
+    assert "| H2O 103 | ERCC1 p.Asn118= rs11615 |" in md
+
+
+def test_boxed_text_extraction(converter):
+    """<boxed-text> under <body> (wrapping <sec>) and with <label>/<caption>."""
+    xml = """<article>
+      <body>
+        <boxed-text>
+          <sec>
+            <title>What is already known about this subject</title>
+            <p><list list-type="bullet">
+              <list-item><p>Point one.</p></list-item>
+            </list></p>
+          </sec>
+          <sec>
+            <title>What this study adds</title>
+            <p><list list-type="bullet">
+              <list-item><p>Point two.</p></list-item>
+            </list></p>
+          </sec>
+        </boxed-text>
+        <sec>
+          <title>Discussion</title>
+          <p>Main text.</p>
+          <boxed-text>
+            <label>Box 1</label>
+            <caption><title>Key Takeaways</title></caption>
+            <p>Takeaway details.</p>
+          </boxed-text>
+        </sec>
+      </body>
+    </article>"""
+    md = converter.convert_xml(xml)
+    assert "## What is already known about this subject" in md
+    assert "- Point one." in md
+    assert "## What this study adds" in md
+    assert "- Point two." in md
+    assert "### Box 1: Key Takeaways" in md
+    assert "Takeaway details." in md
+
+
+def test_supplementary_material_and_empty_section_suppression(converter):
+    """<supplementary-material> renders captions/files; truly empty <sec> is omitted."""
+    xml = """<article xmlns:xlink="http://www.w3.org/1999/xlink">
+      <body>
+        <sec>
+          <title>Supporting information</title>
+          <supplementary-material id="s1">
+            <caption><p><bold>TABLE S1.</bold> Results after imputation</p></caption>
+            <media xlink:href="BCP-91-297-s002.zip">
+              <caption><p>Click here for additional data file.</p></caption>
+            </media>
+          </supplementary-material>
+          <supplementary-material id="s2">
+            <label>1</label>
+            <media xlink:href="supplement-1.pdf"/>
+          </supplementary-material>
+        </sec>
+        <sec>
+          <title>Completely Empty Section</title>
+        </sec>
+      </body>
+    </article>"""
+    md = converter.convert_xml(xml)
+    assert "## Supporting information" in md
+    assert "- **TABLE S1.** Results after imputation (BCP-91-297-s002.zip)" in md
+    assert "Click here for additional data file." not in md
+    assert "- supplement-1.pdf" in md
+    assert "Completely Empty Section" not in md
+
+
+def test_nested_notes_declarations(converter):
+    """Springer Nature / BMC nest <notes> inside <notes><title>Declarations</title>."""
+    xml = """<article>
+      <body><sec><title>Intro</title><p>Body text.</p></sec></body>
+      <back>
+        <notes>
+          <title>Declarations</title>
+          <notes id="n1">
+            <title>Ethics approval</title>
+            <p>Approved by IRB.</p>
+          </notes>
+          <notes id="n2">
+            <title>Competing interests</title>
+            <p>The authors declare no competing interests.</p>
+          </notes>
+        </notes>
+      </back>
+    </article>"""
+    md = converter.convert_xml(xml)
+    assert "## Declarations" in md
+    assert "### Ethics approval" in md
+    assert "Approved by IRB." in md
+    assert "### Competing interests" in md
+    assert "The authors declare no competing interests." in md
+
+
+def test_front_funding_statement_fallback_and_dedup(converter):
+    """<front><funding-group><funding-statement> renders when <back> lacks funding, without duplicating."""
+    xml_front_only = """<article xmlns:xlink="http://www.w3.org/1999/xlink">
+      <front>
+        <article-meta>
+          <title-group><article-title>Funded Study</article-title></title-group>
+          <funding-group>
+            <funding-statement>Supported by grant NIH-123 (<ext-link xlink:href="https://nih.gov">NIH</ext-link>).</funding-statement>
+          </funding-group>
+        </article-meta>
+      </front>
+      <body><p>Body text.</p></body>
+    </article>"""
+    md_front = converter.convert_xml(xml_front_only)
+    assert "## Funding" in md_front
+    assert "Supported by grant NIH-123 ([NIH](https://nih.gov))." in md_front
+
+    xml_both = """<article>
+      <front>
+        <article-meta>
+          <funding-group>
+            <funding-statement>Front funding text.</funding-statement>
+          </funding-group>
+        </article-meta>
+      </front>
+      <body><p>Body text.</p></body>
+      <back>
+        <notes notes-type="funding-information">
+          <title>Funding</title>
+          <p>Back funding text.</p>
+        </notes>
+      </back>
+    </article>"""
+    md_both = converter.convert_xml(xml_both)
+    assert md_both.count("## Funding") == 1
+    assert "Back funding text." in md_both
+    assert "Front funding text." not in md_both
+
+
+def test_mathml_formulas_and_alternatives(converter):
+    """Presentation MathML preserves fractions, scripts, roots, labels, and avoids <alternatives> dupes."""
+    xml = """<article xmlns:mml="http://www.w3.org/1998/Math/MathML">
+      <body>
+        <sec>
+          <title>Methods</title>
+          <p>Heritability <mml:math display="inline"><mml:msubsup><mml:mi>h</mml:mi><mml:mi>SNP</mml:mi><mml:mn>2</mml:mn></mml:msubsup></mml:math> was estimated.</p>
+          <disp-formula>
+            <label>(1)</label>
+            <alternatives>
+              <tex-math>E = \\frac{a}{b}</tex-math>
+              <mml:math display="block">
+                <mml:mrow>
+                  <mml:mi>E</mml:mi><mml:mo>=</mml:mo>
+                  <mml:mfrac>
+                    <mml:mrow><mml:msub><mml:mi>fu</mml:mi><mml:mi>b</mml:mi></mml:msub><mml:mo>×</mml:mo><mml:msub><mml:mi>CL</mml:mi><mml:mi>int</mml:mi></mml:msub></mml:mrow>
+                    <mml:mrow><mml:msub><mml:mi>Q</mml:mi><mml:mi>liver</mml:mi></mml:msub><mml:mo>+</mml:mo><mml:msub><mml:mi>fu</mml:mi><mml:mi>b</mml:mi></mml:msub></mml:mrow>
+                  </mml:mfrac>
+                </mml:mrow>
+              </mml:math>
+            </alternatives>
+          </disp-formula>
+          <disp-formula>
+            <label>(2)</label>
+            <mml:math display="block">
+              <mml:mrow>
+                <mml:mi>Fold</mml:mi><mml:mi>error</mml:mi><mml:mo>=</mml:mo>
+                <mml:mfrac>
+                  <mml:mrow><mml:mi>Predicted</mml:mi><mml:mi>value</mml:mi></mml:mrow>
+                  <mml:mrow><mml:mi>Observed</mml:mi><mml:mi>value</mml:mi></mml:mrow>
+                </mml:mfrac>
+              </mml:mrow>
+            </mml:math>
+          </disp-formula>
+          <p>Root: <mml:math><mml:msqrt><mml:mi>x</mml:mi></mml:msqrt></mml:math> and <mml:math><mml:mi>D</mml:mi><mml:mi>o</mml:mi><mml:mi>s</mml:mi><mml:mi>e</mml:mi></mml:math>.</p>
+        </sec>
+      </body>
+    </article>"""
+    md = converter.convert_xml(xml)
+    assert "Heritability h_SNP_^2^ was estimated." in md
+    assert "E = (fu_b_ × CL_int_) / (Q_liver_ + fu_b_) (1)" in md
+    assert "\\frac" not in md
+    assert "Fold error = (Predicted value) / (Observed value) (2)" in md
+    assert "Root: √(x) and Dose." in md
+
+
+def test_secondary_abstracts_key_points_and_author_summary(converter):
+    """Substantive secondary abstracts (key-points, summary) are extracted; teaser/web-summary skipped."""
+    xml = """<article>
+      <front>
+        <article-meta>
+          <title-group><article-title>Study</article-title></title-group>
+          <abstract abstract-type="key-points">
+            <title>Key Points</title>
+            <sec><title>Question</title><p>Does CYP2C19 affect drug levels?</p></sec>
+            <sec><title>Findings</title><p>Yes, significantly.</p></sec>
+          </abstract>
+          <abstract abstract-type="teaser">
+            <p>Teaser text should be skipped.</p>
+          </abstract>
+          <abstract abstract-type="web-summary">
+            <p>Web summary should be skipped.</p>
+          </abstract>
+          <abstract>
+            <p>Primary abstract body.</p>
+          </abstract>
+          <abstract abstract-type="summary">
+            <title>Author Summary</title>
+            <p>Plain language author summary.</p>
+          </abstract>
+        </article-meta>
+      </front>
+      <body><p>Body.</p></body>
+    </article>"""
+    md = converter.convert_xml(xml)
+    assert "## Abstract\n\nPrimary abstract body." in md
+    assert "## Key Points" in md
+    assert "**Question:**" in md
+    assert "Does CYP2C19 affect drug levels?" in md
+    assert "## Author Summary" in md
+    assert "Plain language author summary." in md
+    assert "Teaser text should be skipped." not in md
+    assert "Web summary should be skipped." not in md
+
+
+def test_fn_group_inside_section_and_disp_quote(converter):
+    """PeerJ-style <fn-group> inside <sec> and <disp-quote> blockquotes."""
+    xml = """<article>
+      <body>
+        <sec>
+          <title>Results</title>
+          <p>Participant statement:</p>
+          <disp-quote>
+            <p>First quoted paragraph.</p>
+            <p>Second quoted paragraph.</p>
+            <attrib>Participant 12</attrib>
+          </disp-quote>
+        </sec>
+      </body>
+      <back>
+        <sec sec-type="additional-information">
+          <title>Additional Information and Declarations</title>
+          <fn-group content-type="competing-interests">
+            <title>Competing Interests</title>
+            <fn><p>The authors declare no competing interests.</p></fn>
+          </fn-group>
+          <fn-group content-type="author-contributions">
+            <title>Author Contributions</title>
+            <fn><p>Jane Doe conceived the study.</p></fn>
+          </fn-group>
+        </sec>
+      </back>
+    </article>"""
+    md = converter.convert_xml(xml)
+    assert "> First quoted paragraph." in md
+    assert "> Second quoted paragraph." in md
+    assert "> — Participant 12" in md
+    assert "## Additional Information and Declarations" in md
+    assert "### Competing Interests" in md
+    assert "The authors declare no competing interests." in md
+    assert "### Author Contributions" in md
+    assert "Jane Doe conceived the study." in md
