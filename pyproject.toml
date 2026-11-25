@@ -47,6 +47,7 @@ exclude = [
     ".vscode/",
     "articles/",
     "data/",
+    "docs/",
     "fetching_notes.md",
 ]
 
