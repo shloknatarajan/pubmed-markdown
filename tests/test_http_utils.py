@@ -189,3 +189,173 @@ def test_get_http_session_is_reused_per_thread():
     t.join()
     assert len(other) == 1
     assert other[0] is not s1
+
+
+# ---------------------------------------------------------------------------
+# HostRateLimiter
+# ---------------------------------------------------------------------------
+
+
+def test_host_rate_limiter_groups_ncbi_and_isolates_europe_pmc():
+    from pubmed_markdown.http_utils import HostRateLimiter
+
+    limiter = HostRateLimiter(
+        intervals={"ncbi_api": 0.25, "europe_pmc": 0.25, "pmc_html": 0.5}
+    )
+
+    with patch("pubmed_markdown.http_utils.time.sleep") as mock_sleep:
+        w1 = limiter.acquire(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+        )
+        # Different host group (Europe PMC) should dispatch immediately
+        w_epmc = limiter.acquire(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC1/fullTextXML"
+        )
+        # Same host group as eutils (www.ncbi.nlm.nih.gov) should wait
+        w2 = limiter.acquire("https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/")
+
+    assert w1 == 0.0
+    assert w_epmc == 0.0
+    assert 0.15 <= w2 <= 0.3
+    mock_sleep.assert_called_once()
+
+
+def test_host_rate_limiter_respects_ncbi_api_key_env(monkeypatch):
+    from pubmed_markdown.http_utils import (
+        HostRateLimiter,
+        NCBI_DEFAULT_MIN_INTERVAL_NO_KEY,
+        NCBI_DEFAULT_MIN_INTERVAL_WITH_KEY,
+    )
+
+    limiter = HostRateLimiter()
+    monkeypatch.delenv("NCBI_API_KEY", raising=False)
+    assert (
+        limiter.default_interval_for_group("ncbi_api")
+        == NCBI_DEFAULT_MIN_INTERVAL_NO_KEY
+    )
+
+    monkeypatch.setenv("NCBI_API_KEY", "test-key")
+    assert (
+        limiter.default_interval_for_group("ncbi_api")
+        == NCBI_DEFAULT_MIN_INTERVAL_WITH_KEY
+    )
+
+
+def test_host_rate_limiter_disabled_and_env_opt_out(monkeypatch):
+    from pubmed_markdown.http_utils import HostRateLimiter
+
+    disabled = HostRateLimiter(intervals={"ncbi_api": 1.0}, enabled=False)
+    assert disabled.acquire("https://eutils.ncbi.nlm.nih.gov/test") == 0.0
+    assert disabled.acquire("https://eutils.ncbi.nlm.nih.gov/test") == 0.0
+
+    limiter = HostRateLimiter(intervals={"ncbi_api": 1.0})
+    monkeypatch.setenv("PUBMED_MARKDOWN_DISABLE_RATE_LIMIT", "1")
+    assert limiter.acquire("https://eutils.ncbi.nlm.nih.gov/test") == 0.0
+    assert limiter.acquire("https://eutils.ncbi.nlm.nih.gov/test") == 0.0
+
+
+def test_host_rate_limiter_thread_safe_dispatch_spacing():
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    from pubmed_markdown.http_utils import HostRateLimiter
+
+    limiter = HostRateLimiter(intervals={"ncbi_api": 0.03})
+    timestamps = []
+
+    def worker():
+        limiter.acquire("https://eutils.ncbi.nlm.nih.gov/test")
+        timestamps.append(time.monotonic())
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(worker) for _ in range(4)]
+        for f in futures:
+            f.result()
+
+    timestamps.sort()
+    # 4 calls spaced by >= 0.03s should span at least ~0.075s total
+    assert timestamps[-1] - timestamps[0] >= 0.07
+
+
+def test_get_with_retries_uses_explicit_rate_limiter_and_api_key_interval():
+    from pubmed_markdown.http_utils import (
+        HostRateLimiter,
+        NCBI_DEFAULT_MIN_INTERVAL_WITH_KEY,
+    )
+
+    limiter = MagicMock(spec=HostRateLimiter)
+    resp_200 = MagicMock(status_code=200, headers={}, text="ok")
+    request_fn = MagicMock(return_value=resp_200)
+
+    get_with_retries(
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+        request_fn=request_fn,
+        params={"db": "pmc", "id": "123", "api_key": "secret"},
+        rate_limiter=limiter,
+    )
+
+    limiter.acquire.assert_called_once_with(
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+        min_interval=NCBI_DEFAULT_MIN_INTERVAL_WITH_KEY,
+    )
+
+
+# ---------------------------------------------------------------------------
+# AsyncRateGate
+# ---------------------------------------------------------------------------
+
+
+def test_async_rate_gate_enforces_concurrency_and_interval():
+    import asyncio
+    import time
+    from pubmed_markdown.http_utils import AsyncRateGate
+
+    gate = AsyncRateGate(concurrency=2, min_interval=0.03)
+    in_flight = 0
+    max_in_flight = 0
+    enter_times = []
+
+    async def task():
+        nonlocal in_flight, max_in_flight
+        async with gate:
+            enter_times.append(time.monotonic())
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+            await asyncio.sleep(0.04)
+            in_flight -= 1
+
+    async def main():
+        await asyncio.gather(*(task() for _ in range(4)))
+
+    # Instantiated before loop exists; also verify reuse across a second loop
+    asyncio.run(main())
+    assert max_in_flight <= 2
+    assert enter_times[-1] - enter_times[0] >= 0.07
+
+    # Second event loop should transparently rebind primitives
+    enter_times.clear()
+    asyncio.run(main())
+    assert len(enter_times) == 4
+
+
+def test_async_rate_gate_for_ncbi_defaults(monkeypatch):
+    from pubmed_markdown.http_utils import (
+        AsyncRateGate,
+        NCBI_DEFAULT_CONCURRENCY_NO_KEY,
+        NCBI_DEFAULT_CONCURRENCY_WITH_KEY,
+        NCBI_DEFAULT_MIN_INTERVAL_NO_KEY,
+        NCBI_DEFAULT_MIN_INTERVAL_WITH_KEY,
+    )
+
+    monkeypatch.delenv("NCBI_API_KEY", raising=False)
+    g_no_key = AsyncRateGate.for_ncbi()
+    assert g_no_key.concurrency == NCBI_DEFAULT_CONCURRENCY_NO_KEY
+    assert g_no_key.min_interval == NCBI_DEFAULT_MIN_INTERVAL_NO_KEY
+
+    g_explicit_key = AsyncRateGate.for_ncbi(ncbi_key="abc123")
+    assert g_explicit_key.concurrency == NCBI_DEFAULT_CONCURRENCY_WITH_KEY
+    assert g_explicit_key.min_interval == NCBI_DEFAULT_MIN_INTERVAL_WITH_KEY
+
+    monkeypatch.setenv("NCBI_API_KEY", "env-key")
+    g_env_key = AsyncRateGate.for_ncbi()
+    assert g_env_key.concurrency == NCBI_DEFAULT_CONCURRENCY_WITH_KEY
+    assert g_env_key.min_interval == NCBI_DEFAULT_MIN_INTERVAL_WITH_KEY

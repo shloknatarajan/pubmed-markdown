@@ -1,15 +1,19 @@
 """
 Shared HTTP utilities: timeouts, retry with exponential backoff + jitter,
-Retry-After parsing, and AWS WAF / CAPTCHA HTML detection.
+Retry-After parsing, AWS WAF / CAPTCHA HTML detection, host-aware rate
+limiting, and async concurrency/dispatch gating.
 """
 
+import asyncio
+import os
 import random
 import re
 import threading
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Union
+from urllib.parse import urlparse
 
 import requests
 from loguru import logger
@@ -19,6 +23,14 @@ DEFAULT_MAX_RETRIES: int = 2
 DEFAULT_BACKOFF_FACTOR: float = 1.0
 MAX_RETRY_AFTER: float = 60.0
 RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
+
+# NCBI API defaults (~3 req/s without key, ~8 req/s with key to leave headroom below 10 req/s)
+NCBI_DEFAULT_CONCURRENCY_NO_KEY: int = 3
+NCBI_DEFAULT_CONCURRENCY_WITH_KEY: int = 8
+NCBI_DEFAULT_MIN_INTERVAL_NO_KEY: float = 0.35
+NCBI_DEFAULT_MIN_INTERVAL_WITH_KEY: float = 0.12
+PMC_HTML_DEFAULT_MIN_INTERVAL: float = 0.5
+EUROPE_PMC_DEFAULT_MIN_INTERVAL: float = 0.1
 
 _ORIG_REQUESTS_GET = requests.get
 _thread_local = threading.local()
@@ -31,6 +43,201 @@ def get_http_session() -> requests.Session:
         session = requests.Session()
         _thread_local.session = session
     return session
+
+
+def _host_group_for_url(url: str) -> str:
+    """Map an upstream URL to a rate-limit host group."""
+    hostname = (urlparse(url).hostname or "").lower()
+    if hostname in ("eutils.ncbi.nlm.nih.gov", "www.ncbi.nlm.nih.gov"):
+        return "ncbi_api"
+    if hostname == "pmc.ncbi.nlm.nih.gov":
+        return "pmc_html"
+    if hostname == "www.ebi.ac.uk":
+        return "europe_pmc"
+    return hostname or "default"
+
+
+class HostRateLimiter:
+    """
+    Thread-safe per-host-group minimum dispatch interval rate limiter.
+
+    Reserves the next allowed dispatch timestamp under a per-group lock and
+    sleeps outside the lock so concurrent threads strictly respect upstream
+    rate limits without blocking unrelated hosts (e.g. Europe PMC vs NCBI).
+    """
+
+    def __init__(
+        self,
+        intervals: Optional[Dict[str, float]] = None,
+        enabled: bool = True,
+    ):
+        self._custom_intervals: Dict[str, float] = dict(intervals or {})
+        self.enabled = enabled
+        self._meta_lock = threading.Lock()
+        self._group_locks: Dict[str, threading.Lock] = {}
+        self._next_allowed: Dict[str, float] = {}
+
+    def default_interval_for_group(self, group: str) -> float:
+        """Return the configured or default minimum dispatch interval for a host group."""
+        if group in self._custom_intervals:
+            return self._custom_intervals[group]
+        if group == "ncbi_api":
+            has_key = bool(os.getenv("NCBI_API_KEY"))
+            return (
+                NCBI_DEFAULT_MIN_INTERVAL_WITH_KEY
+                if has_key
+                else NCBI_DEFAULT_MIN_INTERVAL_NO_KEY
+            )
+        if group == "pmc_html":
+            return PMC_HTML_DEFAULT_MIN_INTERVAL
+        if group == "europe_pmc":
+            return EUROPE_PMC_DEFAULT_MIN_INTERVAL
+        return 0.0
+
+    def _get_group_lock(self, group: str) -> threading.Lock:
+        with self._meta_lock:
+            lock = self._group_locks.get(group)
+            if lock is None:
+                lock = threading.Lock()
+                self._group_locks[group] = lock
+            return lock
+
+    def acquire(
+        self,
+        url: str,
+        min_interval: Optional[float] = None,
+    ) -> float:
+        """
+        Wait until a request to `url`'s host group is permitted.
+
+        Args:
+            url: Target URL.
+            min_interval: Optional per-call interval override in seconds.
+
+        Returns:
+            Seconds slept (0.0 if dispatched immediately or disabled).
+        """
+        if not self.enabled:
+            return 0.0
+        if os.getenv("PUBMED_MARKDOWN_DISABLE_RATE_LIMIT", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            return 0.0
+
+        group = _host_group_for_url(url)
+        interval = (
+            min_interval
+            if min_interval is not None
+            else self.default_interval_for_group(group)
+        )
+        if interval <= 0:
+            return 0.0
+
+        lock = self._get_group_lock(group)
+        with lock:
+            now = time.monotonic()
+            scheduled = max(now, self._next_allowed.get(group, 0.0))
+            self._next_allowed[group] = scheduled + interval
+            wait = scheduled - now
+
+        if wait > 0:
+            time.sleep(wait)
+        return wait
+
+    def reset(self) -> None:
+        """Clear all scheduled dispatch timestamps (useful in tests)."""
+        with self._meta_lock:
+            self._next_allowed.clear()
+
+
+_default_rate_limiter = HostRateLimiter()
+
+
+def get_host_rate_limiter() -> HostRateLimiter:
+    """Return the process-wide default thread-safe HostRateLimiter."""
+    return _default_rate_limiter
+
+
+class AsyncRateGate:
+    """
+    Async concurrency limiter + minimum dispatch interval gate.
+
+    Lazily binds its `asyncio.Semaphore` and `asyncio.Lock` to the currently
+    running event loop, so instances can safely be created at module import time
+    or reused across separate event loops in test suites.
+    """
+
+    def __init__(self, concurrency: int = 3, min_interval: float = 0.35):
+        if concurrency < 1:
+            raise ValueError("concurrency must be >= 1")
+        if min_interval < 0:
+            raise ValueError("min_interval must be >= 0")
+        self.concurrency = concurrency
+        self.min_interval = min_interval
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._sem: Optional[asyncio.Semaphore] = None
+        self._lock: Optional[asyncio.Lock] = None
+        self._last_dispatch: float = 0.0
+
+    @classmethod
+    def for_ncbi(
+        cls,
+        ncbi_key: Optional[str] = None,
+        concurrency: Optional[int] = None,
+        min_interval: Optional[float] = None,
+    ) -> "AsyncRateGate":
+        """Create an AsyncRateGate sized for NCBI quotas based on NCBI_API_KEY availability."""
+        has_key = bool(ncbi_key or os.getenv("NCBI_API_KEY"))
+        eff_concurrency = (
+            concurrency
+            if concurrency is not None
+            else (
+                NCBI_DEFAULT_CONCURRENCY_WITH_KEY
+                if has_key
+                else NCBI_DEFAULT_CONCURRENCY_NO_KEY
+            )
+        )
+        eff_interval = (
+            min_interval
+            if min_interval is not None
+            else (
+                NCBI_DEFAULT_MIN_INTERVAL_WITH_KEY
+                if has_key
+                else NCBI_DEFAULT_MIN_INTERVAL_NO_KEY
+            )
+        )
+        return cls(concurrency=eff_concurrency, min_interval=eff_interval)
+
+    def _ensure_primitives(self) -> tuple[asyncio.Semaphore, asyncio.Lock]:
+        loop = asyncio.get_running_loop()
+        if self._loop is not loop or self._sem is None or self._lock is None:
+            self._loop = loop
+            self._sem = asyncio.Semaphore(self.concurrency)
+            self._lock = asyncio.Lock()
+            self._last_dispatch = 0.0
+        return self._sem, self._lock
+
+    async def __aenter__(self) -> "AsyncRateGate":
+        sem, lock = self._ensure_primitives()
+        await sem.acquire()
+        try:
+            async with lock:
+                if self.min_interval > 0:
+                    now = time.monotonic()
+                    wait = self.min_interval - (now - self._last_dispatch)
+                    if wait > 0:
+                        await asyncio.sleep(wait)
+                self._last_dispatch = time.monotonic()
+        except BaseException:
+            sem.release()
+            raise
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        if self._sem is not None:
+            self._sem.release()
 
 
 _PMC_ARTICLE_RE = re.compile(
@@ -146,9 +353,12 @@ def get_with_retries(
     retry_statuses: frozenset[int] = RETRYABLE_STATUS_CODES,
     validate_response: Optional[Callable[[requests.Response], Optional[str]]] = None,
     context: str = "",
+    rate_limiter: Optional[Union[HostRateLimiter, bool]] = None,
+    rate_limit_interval: Optional[float] = None,
 ) -> requests.Response:
     """
-    Perform an HTTP GET with explicit timeout and retries on transient failures.
+    Perform an HTTP GET with explicit timeout, host-aware rate limiting, and
+    retries on transient failures.
 
     Retries on:
       - ConnectionError / Timeout
@@ -164,13 +374,35 @@ def get_with_retries(
 
     label = f" ({context})" if context else ""
     attempts = max(1, max_retries + 1)
+    is_real_request = request_fn is _ORIG_REQUESTS_GET
     # Use thread-local pooled Session for real unpatched requests.get calls,
     # while honoring patched mocks (e.g. unittest.mock.patch("...requests.get")).
-    effective_request_fn = (
-        get_http_session().get if request_fn is _ORIG_REQUESTS_GET else request_fn
-    )
+    effective_request_fn = get_http_session().get if is_real_request else request_fn
+
+    # Apply host-aware rate limiting automatically on real HTTP calls, or whenever
+    # a HostRateLimiter instance is explicitly passed. Pass rate_limiter=False to opt out.
+    active_limiter: Optional[HostRateLimiter]
+    if isinstance(rate_limiter, HostRateLimiter):
+        active_limiter = rate_limiter
+    elif rate_limiter is False:
+        active_limiter = None
+    elif rate_limiter is True or is_real_request:
+        active_limiter = _default_rate_limiter
+    else:
+        active_limiter = None
+
+    effective_interval = rate_limit_interval
+    if (
+        effective_interval is None
+        and params is not None
+        and params.get("api_key")
+        and _host_group_for_url(url) == "ncbi_api"
+    ):
+        effective_interval = NCBI_DEFAULT_MIN_INTERVAL_WITH_KEY
 
     for attempt in range(attempts):
+        if active_limiter is not None:
+            active_limiter.acquire(url, min_interval=effective_interval)
         try:
             response = effective_request_fn(url, **kwargs)
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:

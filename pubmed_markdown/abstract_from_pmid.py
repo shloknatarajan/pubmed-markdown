@@ -8,32 +8,23 @@ in PubMed Central (no PMCID). Returns a simple markdown-formatted string.
 import os
 import requests
 import xml.etree.ElementTree as ET
-from typing import Optional
+from typing import Optional, Tuple
 from loguru import logger
 
 from .http_utils import DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT, get_with_retries
+from .models import TierError
 
 
-def get_abstract_markdown_from_pmid(
+def fetch_abstract_markdown_from_pmid(
     pmid: str,
     email: Optional[str] = None,
     ncbi_key: Optional[str] = None,
     timeout: float = DEFAULT_TIMEOUT,
     max_retries: int = DEFAULT_MAX_RETRIES,
-) -> Optional[str]:
+) -> Tuple[Optional[str], Optional[TierError]]:
     """
-    Fetch the abstract and metadata for a PMID from PubMed and return as markdown.
-
-    Args:
-        pmid (str): The PubMed ID to fetch
-        email (str, optional): Email for NCBI API identification. Falls back to NCBI_EMAIL env var.
-        ncbi_key (str, optional): NCBI API key (increases rate limit from 3 to 10 req/s).
-            Falls back to NCBI_API_KEY env var.
-        timeout (float): HTTP request timeout in seconds (default: 30.0)
-        max_retries (int): Number of retry attempts for transient errors (default: 2)
-
-    Returns:
-        Optional[str]: Markdown-formatted abstract with title/authors, or None on failure
+    Fetch the abstract and metadata for a PMID from PubMed as markdown, returning
+    `(markdown, None)` on success or `(None, TierError)` on failure.
     """
     if not email:
         email = os.getenv("NCBI_EMAIL")
@@ -58,6 +49,7 @@ def get_abstract_markdown_from_pmid(
     if ncbi_key:
         params["api_key"] = ncbi_key
 
+    response = None
     try:
         response = get_with_retries(
             url,
@@ -68,20 +60,45 @@ def get_abstract_markdown_from_pmid(
             context=f"abstract PMID {pmid}",
         )
         response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        status = response.status_code if response is not None else None
+        logger.error(f"Failed to fetch abstract for PMID {pmid}: {e}")
+        return None, TierError(
+            tier="pubmed_abstract",
+            code="not_found" if status == 404 else "http_error",
+            message=str(e),
+            status_code=status,
+        )
+    except requests.exceptions.Timeout as e:
+        logger.error(f"Failed to fetch abstract for PMID {pmid}: {e}")
+        return None, TierError(tier="pubmed_abstract", code="timeout", message=str(e))
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"Failed to fetch abstract for PMID {pmid}: {e}")
+        return None, TierError(
+            tier="pubmed_abstract", code="connection_error", message=str(e)
+        )
     except requests.exceptions.RequestException as e:
         logger.error(f"Failed to fetch abstract for PMID {pmid}: {e}")
-        return None
+        return None, TierError(
+            tier="pubmed_abstract", code="request_error", message=str(e)
+        )
 
     try:
         root = ET.fromstring(response.text)
     except ET.ParseError as e:
         logger.error(f"Failed to parse XML for PMID {pmid}: {e}")
-        return None
+        return None, TierError(
+            tier="pubmed_abstract", code="parse_error", message=str(e)
+        )
 
     article = root.find(".//PubmedArticle")
     if article is None:
         logger.error(f"No article found in response for PMID {pmid}")
-        return None
+        return None, TierError(
+            tier="pubmed_abstract",
+            code="not_found",
+            message=f"No PubmedArticle found in PubMed response for PMID {pmid}",
+        )
 
     # Extract title
     title_el = article.find(".//ArticleTitle")
@@ -141,7 +158,38 @@ def get_abstract_markdown_from_pmid(
     lines.append(abstract)
     lines.append("")
 
-    return "\n".join(lines)
+    return "\n".join(lines), None
+
+
+def get_abstract_markdown_from_pmid(
+    pmid: str,
+    email: Optional[str] = None,
+    ncbi_key: Optional[str] = None,
+    timeout: float = DEFAULT_TIMEOUT,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+) -> Optional[str]:
+    """
+    Fetch the abstract and metadata for a PMID from PubMed and return as markdown.
+
+    Args:
+        pmid (str): The PubMed ID to fetch
+        email (str, optional): Email for NCBI API identification. Falls back to NCBI_EMAIL env var.
+        ncbi_key (str, optional): NCBI API key (increases rate limit from 3 to 10 req/s).
+            Falls back to NCBI_API_KEY env var.
+        timeout (float): HTTP request timeout in seconds (default: 30.0)
+        max_retries (int): Number of retry attempts for transient errors (default: 2)
+
+    Returns:
+        Optional[str]: Markdown-formatted abstract with title/authors, or None on failure
+    """
+    markdown, _ = fetch_abstract_markdown_from_pmid(
+        pmid,
+        email=email,
+        ncbi_key=ncbi_key,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+    return markdown
 
 
 def _get_element_text(element) -> str:

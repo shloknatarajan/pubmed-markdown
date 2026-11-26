@@ -5,7 +5,6 @@ Public HTTP API for converting PubMed articles (by PMID or PMCID) to markdown.
 """
 
 import asyncio
-import os
 import re
 import time
 import uuid
@@ -21,53 +20,21 @@ from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from pubmed_markdown import PubMedMarkdown, __version__
-from pubmed_markdown.abstract_from_pmid import get_abstract_markdown_from_pmid
-from pubmed_markdown.pmcid_from_pmid import get_pmcid_from_pmid
-from pubmed_markdown.utils_bioc import format_supplement_as_markdown
+from pubmed_markdown import (
+    AsyncRateGate,
+    FetchResult,
+    PubMedMarkdown,
+    __version__,
+    get_pmcid_from_pmid,
+)
 
 # ---------------------------------------------------------------------------
 # Rate limiting
 # ---------------------------------------------------------------------------
 limiter = Limiter(key_func=get_remote_address)
 
-# ---------------------------------------------------------------------------
-# NCBI concurrency + pacing gate – enforces both max in-flight concurrency
-# AND minimum dispatch interval so bursts never exceed NCBI quotas
-# (~3 req/s without key, ~8 req/s with key).
-# ---------------------------------------------------------------------------
-NCBI_CONCURRENCY = 8 if os.getenv("NCBI_API_KEY") else 3
-NCBI_MIN_INTERVAL = 0.12 if os.getenv("NCBI_API_KEY") else 0.35
-
-
-class _AsyncRateGate:
-    """Combines concurrency limiting with a minimum dispatch interval."""
-
-    def __init__(self, concurrency: int, min_interval: float):
-        self._sem = asyncio.Semaphore(concurrency)
-        self._lock = asyncio.Lock()
-        self._min_interval = min_interval
-        self._last_dispatch = 0.0
-
-    async def __aenter__(self):
-        await self._sem.acquire()
-        try:
-            async with self._lock:
-                now = time.monotonic()
-                wait = self._min_interval - (now - self._last_dispatch)
-                if wait > 0:
-                    await asyncio.sleep(wait)
-                self._last_dispatch = time.monotonic()
-        except BaseException:
-            self._sem.release()
-            raise
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        self._sem.release()
-
-
-_ncbi_gate: Optional[_AsyncRateGate] = None
+# Shared NCBI concurrency + pacing gate from pubmed_markdown
+_ncbi_gate: AsyncRateGate = AsyncRateGate.for_ncbi()
 
 # ---------------------------------------------------------------------------
 # Bounded in-memory job store for batch conversions
@@ -102,13 +69,6 @@ def _prune_jobs() -> None:
             _jobs.pop(jid, None)
 
 
-def _get_ncbi_gate() -> _AsyncRateGate:
-    global _ncbi_gate
-    if _ncbi_gate is None:
-        _ncbi_gate = _AsyncRateGate(NCBI_CONCURRENCY, NCBI_MIN_INTERVAL)
-    return _ncbi_gate
-
-
 def _spawn_background_task(coro) -> asyncio.Task:
     """Create a background task while retaining a strong reference until completion."""
     task = asyncio.create_task(coro)
@@ -120,7 +80,7 @@ def _spawn_background_task(coro) -> asyncio.Task:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _ncbi_gate
-    _ncbi_gate = _AsyncRateGate(NCBI_CONCURRENCY, NCBI_MIN_INTERVAL)
+    _ncbi_gate = AsyncRateGate.for_ncbi()
     yield
 
 
@@ -162,14 +122,23 @@ PMID_PATTERN = re.compile(r"^\d+$")
 PMCID_PATTERN = re.compile(r"^PMC\d+$")
 
 
+class TierErrorModel(BaseModel):
+    tier: str
+    code: str
+    message: str
+    status_code: Optional[int] = None
+
+
 class ConvertResult(BaseModel):
     id: str
     id_type: str
     pmcid: Optional[str] = None
     markdown: Optional[str] = None
+    source: Optional[str] = None
     has_supplements: bool = False
     is_abstract_only: bool = False
     error: Optional[str] = None
+    errors: List[TierErrorModel] = Field(default_factory=list)
 
 
 class BatchPmidRequest(BaseModel):
@@ -211,30 +180,37 @@ class JobStatus(BaseModel):
 SourceStrategy = Literal["auto", "xml_first", "html_first", "xml", "html"]
 
 
-async def _fetch_abstract_result(
-    pmid: str,
-    converter: PubMedMarkdown,
-    pmcid: Optional[str] = None,
-) -> Optional[ConvertResult]:
-    """Fetch abstract-only markdown for a PMID behind the NCBI rate gate."""
-    loop = asyncio.get_running_loop()
-    gate = _get_ncbi_gate()
-    async with gate:
-        abstract_md = await loop.run_in_executor(
-            None,
-            lambda: get_abstract_markdown_from_pmid(
-                pmid, email=converter.email, ncbi_key=converter.ncbi_key
-            ),
+def _fetch_result_to_convert_result(
+    item_id: str,
+    id_type: Literal["pmid", "pmcid"],
+    fetched: FetchResult,
+) -> ConvertResult:
+    """Convert a package FetchResult into the HTTP API ConvertResult schema."""
+    tier_errors = [
+        TierErrorModel(
+            tier=err.tier,
+            code=err.code,
+            message=err.message,
+            status_code=err.status_code,
         )
-    if abstract_md is None:
-        return None
+        for err in fetched.errors
+    ]
+    error_message: Optional[str] = None
+    if fetched.markdown is None:
+        error_message = fetched.error_summary or (
+            "Failed to fetch full text from PubMed Central (JATS XML and HTML)."
+        )
+
     return ConvertResult(
-        id=pmid,
-        id_type="pmid",
-        pmcid=pmcid,
-        markdown=abstract_md,
-        has_supplements=False,
-        is_abstract_only=True,
+        id=item_id,
+        id_type=id_type,
+        pmcid=fetched.pmcid,
+        markdown=fetched.markdown,
+        source=fetched.source,
+        has_supplements=fetched.has_supplements,
+        is_abstract_only=fetched.is_abstract_only,
+        error=error_message,
+        errors=tier_errors,
     )
 
 
@@ -246,66 +222,16 @@ async def _convert_pmid(
     pre_resolved_pmcid: Optional[str] = None,
     skip_id_lookup: bool = False,
 ) -> ConvertResult:
-    """Run the PMID→markdown pipeline in a thread (it does blocking I/O)."""
-    loop = asyncio.get_running_loop()
-    gate = _get_ncbi_gate()
-    converter = PubMedMarkdown(source=source)
-
-    if skip_id_lookup:
-        pmcid = pre_resolved_pmcid
-    else:
-        async with gate:
-            pmcid_mapping = await loop.run_in_executor(
-                None, lambda: get_pmcid_from_pmid([pmid], email=converter.email)
-            )
-        pmcid = pmcid_mapping.get(str(pmid))
-
-    if pmcid is None:
-        if fallback_to_abstract:
-            abstract_res = await _fetch_abstract_result(pmid, converter)
-            if abstract_res is not None:
-                return abstract_res
-        return ConvertResult(
-            id=pmid,
-            id_type="pmid",
-            error="No PMCID found for this PMID. The article may not be available in PubMed Central.",
-        )
-
-    async with gate:
-        fetched = await loop.run_in_executor(
-            None, converter._fetch_pmcid_markdown, pmcid
-        )
-    if fetched is None:
-        if fallback_to_abstract:
-            abstract_res = await _fetch_abstract_result(pmid, converter, pmcid=pmcid)
-            if abstract_res is not None:
-                return abstract_res
-        return ConvertResult(
-            id=pmid,
-            id_type="pmid",
-            pmcid=pmcid,
-            error="Failed to fetch full text from PubMed Central (JATS XML and HTML).",
-        )
-
-    markdown, _, _ = fetched
-
-    has_supplements = False
-    if include_supplements:
-        async with gate:
-            supplement = await loop.run_in_executor(
-                None, format_supplement_as_markdown, pmcid
-            )
-        if supplement:
-            markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
-            has_supplements = True
-
-    return ConvertResult(
-        id=pmid,
-        id_type="pmid",
-        pmcid=pmcid,
-        markdown=markdown,
-        has_supplements=has_supplements,
+    """Run the PMID->markdown pipeline using PubMedMarkdown's built-in async API."""
+    converter = PubMedMarkdown(source=source, rate_gate=_ncbi_gate)
+    fetched = await converter.afetch_pmid(
+        pmid,
+        include_supplements=include_supplements,
+        fallback_to_abstract=fallback_to_abstract,
+        pre_resolved_pmcid=pre_resolved_pmcid,
+        skip_id_lookup=skip_id_lookup,
     )
+    return _fetch_result_to_convert_result(pmid, "pmid", fetched)
 
 
 async def _convert_pmcid(
@@ -313,42 +239,12 @@ async def _convert_pmcid(
     include_supplements: bool = True,
     source: SourceStrategy = "auto",
 ) -> ConvertResult:
-    """Run the PMCID→markdown pipeline in a thread (it does blocking I/O)."""
-    loop = asyncio.get_running_loop()
-    gate = _get_ncbi_gate()
-    converter = PubMedMarkdown(source=source)
-
-    async with gate:
-        fetched = await loop.run_in_executor(
-            None, converter._fetch_pmcid_markdown, pmcid
-        )
-    if fetched is None:
-        return ConvertResult(
-            id=pmcid,
-            id_type="pmcid",
-            pmcid=pmcid,
-            error="Failed to fetch full text from PubMed Central (JATS XML and HTML).",
-        )
-
-    markdown, _, _ = fetched
-
-    has_supplements = False
-    if include_supplements:
-        async with gate:
-            supplement = await loop.run_in_executor(
-                None, format_supplement_as_markdown, pmcid
-            )
-        if supplement:
-            markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
-            has_supplements = True
-
-    return ConvertResult(
-        id=pmcid,
-        id_type="pmcid",
-        pmcid=pmcid,
-        markdown=markdown,
-        has_supplements=has_supplements,
+    """Run the PMCID->markdown pipeline using PubMedMarkdown's built-in async API."""
+    converter = PubMedMarkdown(source=source, rate_gate=_ncbi_gate)
+    fetched = await converter.afetch_pmcid(
+        pmcid, include_supplements=include_supplements
     )
+    return _fetch_result_to_convert_result(pmcid, "pmcid", fetched)
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +280,7 @@ async def convert_pmid(
                 "error": "conversion_failed",
                 "message": result.error,
                 "pmid": pmid,
+                "errors": [e.model_dump() for e in result.errors],
             },
         )
     return result
@@ -410,6 +307,7 @@ async def convert_pmcid(
                 "error": "conversion_failed",
                 "message": result.error,
                 "pmcid": pmcid,
+                "errors": [e.model_dump() for e in result.errors],
             },
         )
     return result
@@ -428,12 +326,10 @@ async def _run_batch_pmid_job(
     _jobs[job_id]["status"] = "running"
     _jobs[job_id]["updated_at"] = time.monotonic()
     try:
-        loop = asyncio.get_running_loop()
-        gate = _get_ncbi_gate()
-        converter = PubMedMarkdown(source=source)
-        async with gate:
-            pmcid_mapping = await loop.run_in_executor(
-                None, lambda: get_pmcid_from_pmid(pmids, email=converter.email)
+        converter = PubMedMarkdown(source=source, rate_gate=_ncbi_gate)
+        async with _ncbi_gate:
+            pmcid_mapping = await asyncio.to_thread(
+                get_pmcid_from_pmid, pmids, converter.email
             )
 
         results: List[ConvertResult] = []

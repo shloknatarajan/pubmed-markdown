@@ -116,6 +116,41 @@ supplement = fetch_bioc_supplement("PMC6435416")
 supplement_md = format_supplement_as_markdown("PMC6435416")
 ```
 
+**Structured results & error diagnostics (`FetchResult`):**
+
+```python
+from pubmed_markdown import PubMedMarkdown
+
+downloader = PubMedMarkdown()
+
+result = downloader.fetch_pmcid("PMC1884285")
+if result.ok:
+    print(result.source)           # "ncbi_xml" | "europe_pmc_xml" | "pmc_html"
+    print(result.has_supplements)  # True / False
+    print(result.markdown)
+else:
+    for err in result.errors:
+        print(err.tier, err.code, err.message)  # e.g. ncbi_xml xml_restricted ...
+```
+
+**Async usage (built-in NCBI-aware rate limiting):**
+
+```python
+import asyncio
+from pubmed_markdown import AsyncRateGate, PubMedMarkdown
+
+# Share a single AsyncRateGate across concurrent FastAPI requests or batch tasks
+gate = AsyncRateGate.for_ncbi()  # 3 concurrent / 0.35s (or 8 / 0.12s with NCBI_API_KEY)
+downloader = PubMedMarkdown(rate_gate=gate)
+
+async def main():
+    result = await downloader.afetch_pmid("12895196")
+    batch = await downloader.afetch_pmids(["12895196", "17872605"])
+    markdown = await downloader.apmcid_to_markdown("PMC1884285")
+
+asyncio.run(main())
+```
+
 ### Command Line
 
 ```bash
@@ -133,8 +168,11 @@ pubmed-download --file_path=pmids.txt --email=your-email@institution.edu
 
 | Method | Creates Files | Returns | Use Case |
 |--------|--------------|---------|----------|
-| `pmid_to_markdown()` | No | Markdown string(s) | Single or batch, programmatic use |
-| `pmcid_to_markdown()` | No | Markdown string(s) | Direct PMCID conversion |
+| `fetch_pmid()` / `afetch_pmid()` | No | `FetchResult` | Structured result with source tier & per-tier errors (sync / async) |
+| `fetch_pmcid()` / `afetch_pmcid()` | No | `FetchResult` | Direct PMCID structured fetch (sync / async) |
+| `afetch_pmids()` / `afetch_pmcids()` | No | `List[FetchResult]` | Concurrent rate-gated async batch fetch |
+| `pmid_to_markdown()` / `apmid_to_markdown()` | No | Markdown string(s) | Single or batch, programmatic use (sync / async) |
+| `pmcid_to_markdown()` / `apmcid_to_markdown()` | No | Markdown string(s) | Direct PMCID conversion (sync / async) |
 | `pmids_to_markdown_files()` | Yes | None | Batch processing, building datasets |
 | `pmids_to_pmcids()` | No | List of PMCIDs | PMID to PMCID resolution |
 | `pmcids_to_html()` | Yes | None | Fetch and save raw HTML |

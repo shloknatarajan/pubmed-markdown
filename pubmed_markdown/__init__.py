@@ -10,7 +10,14 @@ from .xml_from_pmcid import (
 )
 from .markdown_from_html import PubMedHTMLToMarkdownConverter
 from .markdown_from_jats import JATSToMarkdownConverter
-from .http_utils import WAFChallengeError, is_waf_or_captcha_html
+from .http_utils import (
+    AsyncRateGate,
+    HostRateLimiter,
+    WAFChallengeError,
+    get_host_rate_limiter,
+    is_waf_or_captcha_html,
+)
+from .models import FetchResult, TierError
 from .pmcid_from_pmid import get_pmcid_from_pmid
 from .manage_records import get_scraped_pmids
 from .core import PubMedMarkdown
@@ -23,10 +30,15 @@ from .abstract_from_pmid import get_abstract_markdown_from_pmid
 try:
     __version__ = version("pubmed-markdown")
 except PackageNotFoundError:
-    __version__ = "0.3.0"
+    __version__ = "0.4.0"
 
 __all__ = [
     "PubMedMarkdown",
+    "FetchResult",
+    "TierError",
+    "AsyncRateGate",
+    "HostRateLimiter",
+    "get_host_rate_limiter",
     "PubMedHTMLToMarkdownConverter",
     "JATSToMarkdownConverter",
     "get_html_from_pmcid",

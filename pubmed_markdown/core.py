@@ -1,11 +1,17 @@
 from .pmcid_from_pmid import get_pmcid_from_pmid
-from .html_from_pmcid import get_html_from_pmcid
-from .xml_from_pmcid import get_xml_from_pmcid
+from .html_from_pmcid import fetch_html_from_pmcid, get_html_from_pmcid
+from .xml_from_pmcid import fetch_xml_from_pmcid, get_xml_from_pmcid
 from .markdown_from_html import PubMedHTMLToMarkdownConverter
 from .markdown_from_jats import JATSToMarkdownConverter
 from .utils_bioc import format_supplement_as_markdown
-from .abstract_from_pmid import get_abstract_markdown_from_pmid
+from .abstract_from_pmid import (
+    fetch_abstract_markdown_from_pmid,
+    get_abstract_markdown_from_pmid,
+)
+from .http_utils import AsyncRateGate
+from .models import FetchResult, SourceTier, TierError
 from typing import List, Optional, Tuple, Union
+import asyncio
 import os
 import re
 from loguru import logger
@@ -14,6 +20,13 @@ import argparse
 import time
 
 VALID_SOURCES = ("auto", "xml_first", "html_first", "xml", "html")
+
+# Original unpatched function references so real calls use the structured
+# fetch_* helpers while unittest.mock.patch("pubmed_markdown.core.get_*")
+# continues to work seamlessly.
+_ORIG_GET_XML = get_xml_from_pmcid
+_ORIG_GET_HTML = get_html_from_pmcid
+_ORIG_GET_ABSTRACT = get_abstract_markdown_from_pmid
 
 _EXISTING_SUPP_HEADING_RE = re.compile(
     r"^##\s+(?:electronic\s+)?(?:supplementary|supporting)\b",
@@ -48,6 +61,9 @@ class PubMedMarkdown:
             - "html_first": PMC HTML -> NCBI E-utilities JATS XML -> Europe PMC XML
             - "xml": JATS XML only (NCBI E-utilities -> Europe PMC)
             - "html": PMC HTML only (legacy behavior)
+        rate_gate (AsyncRateGate, optional): Shared async concurrency + pacing gate for
+            `a*` async methods. If omitted, a default NCBI-aware `AsyncRateGate` is created
+            lazily on first async call.
     """
 
     def __init__(
@@ -57,6 +73,7 @@ class PubMedMarkdown:
         ncbi_key: Optional[str] = None,
         request_delay: Optional[float] = None,
         source: str = "auto",
+        rate_gate: Optional[AsyncRateGate] = None,
     ):
         if source not in VALID_SOURCES:
             raise ValueError(
@@ -68,6 +85,7 @@ class PubMedMarkdown:
         self.email = email or os.getenv("NCBI_EMAIL")
         self.ncbi_key = ncbi_key or os.getenv("NCBI_API_KEY")
         self.source = source
+        self._rate_gate = rate_gate
         if request_delay is not None:
             self.request_delay = request_delay
         elif source in ("html_first", "html"):
@@ -85,31 +103,92 @@ class PubMedMarkdown:
         """Delay between consecutive NCBI E-utilities calls (~10 req/s with key, ~3 req/s without)."""
         return 0.15 if self.ncbi_key else 0.4
 
-    def _try_xml_to_markdown(self, pmcid: str) -> Optional[Tuple[str, str]]:
-        """Fetch JATS XML (NCBI efetch -> Europe PMC) and convert to markdown."""
-        xml = get_xml_from_pmcid(pmcid, email=self.email, ncbi_key=self.ncbi_key)
-        if xml is None:
-            return None
+    def _get_rate_gate(self, override: Optional[AsyncRateGate] = None) -> AsyncRateGate:
+        """Return an AsyncRateGate, lazily creating an NCBI-aware default if needed."""
+        if override is not None:
+            return override
+        if self._rate_gate is None:
+            self._rate_gate = AsyncRateGate.for_ncbi(ncbi_key=self.ncbi_key)
+        return self._rate_gate
 
+    def _try_xml_to_markdown_detailed(
+        self, pmcid: str
+    ) -> Tuple[Optional[str], Optional[SourceTier], Optional[str], List[TierError]]:
+        """Fetch JATS XML (NCBI efetch -> Europe PMC) and convert to markdown with error details."""
+        if get_xml_from_pmcid is _ORIG_GET_XML:
+            xml, source_tier, errors = fetch_xml_from_pmcid(
+                pmcid, email=self.email, ncbi_key=self.ncbi_key
+            )
+        else:
+            xml = get_xml_from_pmcid(pmcid, email=self.email, ncbi_key=self.ncbi_key)
+            source_tier = "ncbi_xml" if xml is not None else None
+            errors = (
+                []
+                if xml is not None
+                else [
+                    TierError(
+                        tier="ncbi_xml",
+                        code="empty_output",
+                        message=f"JATS XML unavailable for {pmcid}",
+                    )
+                ]
+            )
+
+        if xml is None:
+            return None, None, None, errors
+
+        tier_name = source_tier or "ncbi_xml"
         try:
             markdown = self.jats_to_markdown.convert_xml(xml)
         except Exception as e:
             logger.error(
                 f"Error converting JATS XML to markdown for PMCID {pmcid}: {str(e)}"
             )
-            return None
+            errors.append(TierError(tier=tier_name, code="parse_error", message=str(e)))
+            return None, None, None, errors
 
         if not markdown or not markdown.strip():
             logger.warning(f"Empty markdown produced from JATS XML for PMCID {pmcid}")
-            return None
+            errors.append(
+                TierError(
+                    tier=tier_name,
+                    code="empty_output",
+                    message=f"Empty markdown produced from JATS XML for {pmcid}",
+                )
+            )
+            return None, None, None, errors
 
+        return markdown, tier_name, xml, errors
+
+    def _try_xml_to_markdown(self, pmcid: str) -> Optional[Tuple[str, str]]:
+        """Fetch JATS XML (NCBI efetch -> Europe PMC) and convert to markdown."""
+        markdown, _, xml, _ = self._try_xml_to_markdown_detailed(pmcid)
+        if markdown is None or xml is None:
+            return None
         return markdown, xml
 
-    def _try_html_to_markdown(self, pmcid: str) -> Optional[Tuple[str, str]]:
-        """Fetch PMC HTML and convert to markdown."""
-        html = get_html_from_pmcid(pmcid, email=self.email)
+    def _try_html_to_markdown_detailed(
+        self, pmcid: str
+    ) -> Tuple[Optional[str], Optional[str], List[TierError]]:
+        """Fetch PMC HTML and convert to markdown with error details."""
+        errors: List[TierError] = []
+        if get_html_from_pmcid is _ORIG_GET_HTML:
+            html, html_err = fetch_html_from_pmcid(pmcid, email=self.email)
+            if html_err is not None:
+                errors.append(html_err)
+        else:
+            html = get_html_from_pmcid(pmcid, email=self.email)
+            if html is None:
+                errors.append(
+                    TierError(
+                        tier="pmc_html",
+                        code="empty_output",
+                        message=f"PMC HTML unavailable for {pmcid}",
+                    )
+                )
+
         if html is None:
-            return None
+            return None, None, errors
 
         try:
             markdown = self.html_to_markdown.convert_html(html)
@@ -117,9 +196,106 @@ class PubMedMarkdown:
             logger.error(
                 f"Error converting HTML to markdown for PMCID {pmcid}: {str(e)}"
             )
-            return None
+            errors.append(
+                TierError(tier="pmc_html", code="parse_error", message=str(e))
+            )
+            return None, None, errors
 
+        if not markdown or not markdown.strip():
+            logger.warning(f"Empty markdown produced from PMC HTML for PMCID {pmcid}")
+            errors.append(
+                TierError(
+                    tier="pmc_html",
+                    code="empty_output",
+                    message=f"Empty markdown produced from PMC HTML for {pmcid}",
+                )
+            )
+            return None, None, errors
+
+        return markdown, html, errors
+
+    def _try_html_to_markdown(self, pmcid: str) -> Optional[Tuple[str, str]]:
+        """Fetch PMC HTML and convert to markdown."""
+        markdown, html, _ = self._try_html_to_markdown_detailed(pmcid)
+        if markdown is None or html is None:
+            return None
         return markdown, html
+
+    def _try_abstract_detailed(
+        self, pmid: str
+    ) -> Tuple[Optional[str], Optional[TierError]]:
+        """Fetch abstract-only markdown for a PMID with structured error details."""
+        if get_abstract_markdown_from_pmid is _ORIG_GET_ABSTRACT:
+            return fetch_abstract_markdown_from_pmid(
+                pmid, email=self.email, ncbi_key=self.ncbi_key
+            )
+        abstract_md = get_abstract_markdown_from_pmid(
+            pmid, email=self.email, ncbi_key=self.ncbi_key
+        )
+        if abstract_md is None:
+            return None, TierError(
+                tier="pubmed_abstract",
+                code="empty_output",
+                message=f"Failed to fetch abstract for PMID {pmid}",
+            )
+        return abstract_md, None
+
+    def _fetch_pmcid_detailed(self, pmcid: str) -> Tuple[
+        Optional[str],
+        Optional[SourceTier],
+        Optional[str],
+        Optional[str],
+        List[TierError],
+    ]:
+        """
+        Fetch and convert a single PMCID according to `self.source`, returning
+        `(markdown, source_tier, raw_format ["xml"|"html"], raw_content, errors)`.
+        """
+        errors: List[TierError] = []
+
+        if self.source in ("auto", "xml_first"):
+            md, tier, raw_xml, xml_errs = self._try_xml_to_markdown_detailed(pmcid)
+            errors.extend(xml_errs)
+            if md is not None and tier is not None:
+                return md, tier, "xml", raw_xml, errors
+
+            logger.info(
+                f"Falling back to PMC HTML for {pmcid} after JATS XML unavailable"
+            )
+            md, raw_html, html_errs = self._try_html_to_markdown_detailed(pmcid)
+            errors.extend(html_errs)
+            if md is not None:
+                return md, "pmc_html", "html", raw_html, errors
+            return None, None, None, None, errors
+
+        if self.source == "html_first":
+            md, raw_html, html_errs = self._try_html_to_markdown_detailed(pmcid)
+            errors.extend(html_errs)
+            if md is not None:
+                return md, "pmc_html", "html", raw_html, errors
+
+            logger.info(
+                f"Falling back to JATS XML for {pmcid} after PMC HTML unavailable"
+            )
+            md, tier, raw_xml, xml_errs = self._try_xml_to_markdown_detailed(pmcid)
+            errors.extend(xml_errs)
+            if md is not None and tier is not None:
+                return md, tier, "xml", raw_xml, errors
+            return None, None, None, None, errors
+
+        if self.source == "xml":
+            md, tier, raw_xml, xml_errs = self._try_xml_to_markdown_detailed(pmcid)
+            errors.extend(xml_errs)
+            if md is not None and tier is not None:
+                return md, tier, "xml", raw_xml, errors
+            return None, None, None, None, errors
+
+        # self.source == "html"
+        md, raw_html, html_errs = self._try_html_to_markdown_detailed(pmcid)
+        errors.extend(html_errs)
+        if md is not None:
+            return md, "pmc_html", "html", raw_html, errors
+        return None, None, None, None, errors
 
     def _fetch_pmcid_markdown(self, pmcid: str) -> Optional[Tuple[str, str, str]]:
         """
@@ -128,58 +304,304 @@ class PubMedMarkdown:
         Returns:
             Tuple of (markdown, format_name ["xml" | "html"], raw_content), or None on failure.
         """
-        if self.source in ("auto", "xml_first"):
-            xml_result = self._try_xml_to_markdown(pmcid)
-            if xml_result is not None:
-                return xml_result[0], "xml", xml_result[1]
-            logger.info(
-                f"Falling back to PMC HTML for {pmcid} after JATS XML unavailable"
+        md, _, fmt, raw_content, _ = self._fetch_pmcid_detailed(pmcid)
+        if md is None or fmt is None or raw_content is None:
+            return None
+        return md, fmt, raw_content
+
+    def fetch_pmcid(self, pmcid: str, include_supplements: bool = True) -> FetchResult:
+        """
+        Fetch and convert a single PMCID, returning a structured `FetchResult`
+        with source tier attribution, supplement flag, and per-tier error diagnostics.
+
+        Args:
+            pmcid: A single PMCID (e.g. "PMC1234567").
+            include_supplements: Whether to append BioC supplementary materials (default: True).
+
+        Returns:
+            FetchResult containing markdown (or None), winning source tier, and tier errors.
+        """
+        cleaned_pmcid = pmcid.strip() if isinstance(pmcid, str) else str(pmcid)
+        md, source_tier, _, _, errors = self._fetch_pmcid_detailed(cleaned_pmcid)
+        if md is None:
+            return FetchResult(
+                markdown=None,
+                source=None,
+                pmcid=cleaned_pmcid,
+                has_supplements=False,
+                is_abstract_only=False,
+                errors=tuple(errors),
             )
-            html_result = self._try_html_to_markdown(pmcid)
-            if html_result is not None:
-                return html_result[0], "html", html_result[1]
-            return None
 
-        if self.source == "html_first":
-            html_result = self._try_html_to_markdown(pmcid)
-            if html_result is not None:
-                return html_result[0], "html", html_result[1]
-            logger.info(
-                f"Falling back to JATS XML for {pmcid} after PMC HTML unavailable"
+        has_supplements = False
+        if include_supplements:
+            supplement = format_supplement_as_markdown(cleaned_pmcid)
+            if supplement:
+                md = md.rstrip() + "\n\n" + supplement + "\n"
+                has_supplements = True
+
+        return FetchResult(
+            markdown=md,
+            source=source_tier,
+            pmcid=cleaned_pmcid,
+            has_supplements=has_supplements,
+            is_abstract_only=False,
+            errors=tuple(errors),
+        )
+
+    def fetch_pmid(
+        self,
+        pmid: str,
+        include_supplements: bool = True,
+        fallback_to_abstract: bool = True,
+        *,
+        pre_resolved_pmcid: Optional[str] = None,
+        skip_id_lookup: bool = False,
+    ) -> FetchResult:
+        """
+        Fetch and convert a single PMID, returning a structured `FetchResult`.
+
+        Preserves all upstream `TierError` diagnostics even when a later tier or
+        abstract fallback succeeds, so callers can inspect why full text was unavailable.
+
+        Args:
+            pmid: A single PubMed ID (e.g. "12895196").
+            include_supplements: Whether to append BioC supplementary materials (default: True).
+            fallback_to_abstract: Fall back to PubMed abstract if full text is unavailable (default: True).
+            pre_resolved_pmcid: Optional PMCID from an earlier batched lookup.
+            skip_id_lookup: If True, use `pre_resolved_pmcid` directly without calling ID converter.
+
+        Returns:
+            FetchResult with markdown (or None), winning source tier, PMCID, and tier errors.
+        """
+        cleaned_pmid = str(pmid).strip()
+        errors: List[TierError] = []
+
+        if skip_id_lookup:
+            pmcid = pre_resolved_pmcid
+        else:
+            pmcid_mapping = get_pmcid_from_pmid([cleaned_pmid], email=self.email)
+            pmcid = pmcid_mapping.get(cleaned_pmid)
+
+        if pmcid is None:
+            errors.append(
+                TierError(
+                    tier="id_converter",
+                    code="no_pmcid",
+                    message=f"No PMCID found for PMID {cleaned_pmid}; article may not be in PubMed Central.",
+                )
             )
-            xml_result = self._try_xml_to_markdown(pmcid)
-            if xml_result is not None:
-                return xml_result[0], "xml", xml_result[1]
-            return None
+            if not fallback_to_abstract:
+                return FetchResult(
+                    markdown=None,
+                    source=None,
+                    pmid=cleaned_pmid,
+                    pmcid=None,
+                    has_supplements=False,
+                    is_abstract_only=False,
+                    errors=tuple(errors),
+                )
+            logger.warning(
+                f"PMID {cleaned_pmid} is not available on PubMed Central (Open Access). "
+                f"Downloading abstract only."
+            )
+            abstract_md, abs_err = self._try_abstract_detailed(cleaned_pmid)
+            if abs_err is not None:
+                errors.append(abs_err)
+            return FetchResult(
+                markdown=abstract_md,
+                source="pubmed_abstract" if abstract_md is not None else None,
+                pmid=cleaned_pmid,
+                pmcid=None,
+                has_supplements=False,
+                is_abstract_only=abstract_md is not None,
+                errors=tuple(errors),
+            )
 
-        if self.source == "xml":
-            xml_result = self._try_xml_to_markdown(pmcid)
-            if xml_result is not None:
-                return xml_result[0], "xml", xml_result[1]
-            return None
+        pmcid_result = self.fetch_pmcid(pmcid, include_supplements=include_supplements)
+        errors.extend(pmcid_result.errors)
+        if pmcid_result.markdown is not None:
+            return FetchResult(
+                markdown=pmcid_result.markdown,
+                source=pmcid_result.source,
+                pmid=cleaned_pmid,
+                pmcid=pmcid_result.pmcid,
+                has_supplements=pmcid_result.has_supplements,
+                is_abstract_only=False,
+                errors=tuple(errors),
+            )
 
-        # self.source == "html"
-        html_result = self._try_html_to_markdown(pmcid)
-        if html_result is not None:
-            return html_result[0], "html", html_result[1]
-        return None
+        if fallback_to_abstract:
+            logger.warning(
+                f"Full text unavailable for PMID {cleaned_pmid} ({pmcid}); "
+                f"falling back to abstract only."
+            )
+            abstract_md, abs_err = self._try_abstract_detailed(cleaned_pmid)
+            if abs_err is not None:
+                errors.append(abs_err)
+            return FetchResult(
+                markdown=abstract_md,
+                source="pubmed_abstract" if abstract_md is not None else None,
+                pmid=cleaned_pmid,
+                pmcid=pmcid,
+                has_supplements=False,
+                is_abstract_only=abstract_md is not None,
+                errors=tuple(errors),
+            )
+
+        return FetchResult(
+            markdown=None,
+            source=None,
+            pmid=cleaned_pmid,
+            pmcid=pmcid,
+            has_supplements=False,
+            is_abstract_only=False,
+            errors=tuple(errors),
+        )
+
+    async def afetch_pmcid(
+        self,
+        pmcid: str,
+        include_supplements: bool = True,
+        *,
+        rate_gate: Optional[AsyncRateGate] = None,
+    ) -> FetchResult:
+        """Async version of `fetch_pmcid`, guarded by an `AsyncRateGate` and run off the event loop."""
+        gate = self._get_rate_gate(rate_gate)
+        async with gate:
+            return await asyncio.to_thread(self.fetch_pmcid, pmcid, include_supplements)
+
+    async def afetch_pmid(
+        self,
+        pmid: str,
+        include_supplements: bool = True,
+        fallback_to_abstract: bool = True,
+        *,
+        pre_resolved_pmcid: Optional[str] = None,
+        skip_id_lookup: bool = False,
+        rate_gate: Optional[AsyncRateGate] = None,
+    ) -> FetchResult:
+        """Async version of `fetch_pmid`, guarded by an `AsyncRateGate` and run off the event loop."""
+        gate = self._get_rate_gate(rate_gate)
+        async with gate:
+            return await asyncio.to_thread(
+                self.fetch_pmid,
+                pmid,
+                include_supplements,
+                fallback_to_abstract,
+                pre_resolved_pmcid=pre_resolved_pmcid,
+                skip_id_lookup=skip_id_lookup,
+            )
+
+    async def afetch_pmcids(
+        self,
+        pmcids: List[str],
+        include_supplements: bool = True,
+        *,
+        rate_gate: Optional[AsyncRateGate] = None,
+    ) -> List[FetchResult]:
+        """Concurrently fetch a batch of PMCIDs bounded by `AsyncRateGate`, preserving input order."""
+        if not pmcids:
+            return []
+        gate = self._get_rate_gate(rate_gate)
+        return list(
+            await asyncio.gather(
+                *(
+                    self.afetch_pmcid(
+                        pmcid,
+                        include_supplements=include_supplements,
+                        rate_gate=gate,
+                    )
+                    for pmcid in pmcids
+                )
+            )
+        )
+
+    async def afetch_pmids(
+        self,
+        pmids: List[str],
+        include_supplements: bool = True,
+        fallback_to_abstract: bool = True,
+        *,
+        rate_gate: Optional[AsyncRateGate] = None,
+    ) -> List[FetchResult]:
+        """
+        Concurrently fetch a batch of PMIDs bounded by `AsyncRateGate`, preserving input order.
+
+        Performs a single batched PMID->PMCID lookup before fanning out article fetches.
+        """
+        if not pmids:
+            return []
+        gate = self._get_rate_gate(rate_gate)
+        normalized_pmids = [str(p).strip() for p in pmids]
+        async with gate:
+            pmcid_mapping = await asyncio.to_thread(
+                get_pmcid_from_pmid, normalized_pmids, self.email
+            )
+        return list(
+            await asyncio.gather(
+                *(
+                    self.afetch_pmid(
+                        p,
+                        include_supplements=include_supplements,
+                        fallback_to_abstract=fallback_to_abstract,
+                        pre_resolved_pmcid=pmcid_mapping.get(p),
+                        skip_id_lookup=True,
+                        rate_gate=gate,
+                    )
+                    for p in normalized_pmids
+                )
+            )
+        )
+
+    async def apmcid_to_markdown(
+        self,
+        pmcids: Union[str, List[str]],
+        include_supplements: bool = True,
+        *,
+        rate_gate: Optional[AsyncRateGate] = None,
+    ) -> Union[Optional[str], List[Optional[str]]]:
+        """Async version of `pmcid_to_markdown`."""
+        if isinstance(pmcids, str):
+            res = await self.afetch_pmcid(
+                pmcids, include_supplements=include_supplements, rate_gate=rate_gate
+            )
+            return res.markdown
+        results = await self.afetch_pmcids(
+            pmcids, include_supplements=include_supplements, rate_gate=rate_gate
+        )
+        return [r.markdown for r in results]
+
+    async def apmid_to_markdown(
+        self,
+        pmid: Union[str, List[str]],
+        include_supplements: bool = True,
+        fallback_to_abstract: bool = True,
+        *,
+        rate_gate: Optional[AsyncRateGate] = None,
+    ) -> Union[Optional[str], List[Optional[str]]]:
+        """Async version of `pmid_to_markdown`."""
+        if isinstance(pmid, str):
+            res = await self.afetch_pmid(
+                pmid,
+                include_supplements=include_supplements,
+                fallback_to_abstract=fallback_to_abstract,
+                rate_gate=rate_gate,
+            )
+            return res.markdown
+        results = await self.afetch_pmids(
+            pmid,
+            include_supplements=include_supplements,
+            fallback_to_abstract=fallback_to_abstract,
+            rate_gate=rate_gate,
+        )
+        return [r.markdown for r in results]
 
     def _single_pmcid_to_markdown(
         self, pmcid: str, include_supplements: bool = True
     ) -> Optional[str]:
         """Convert a single PMCID to markdown. Internal helper."""
-        fetched = self._fetch_pmcid_markdown(pmcid)
-        if fetched is None:
-            return None
-
-        markdown, _, _ = fetched
-
-        if include_supplements:
-            supplement = format_supplement_as_markdown(pmcid)
-            if supplement:
-                markdown = markdown.rstrip() + "\n\n" + supplement + "\n"
-
-        return markdown
+        return self.fetch_pmcid(pmcid, include_supplements=include_supplements).markdown
 
     def pmcid_to_markdown(
         self,
@@ -214,33 +636,11 @@ class PubMedMarkdown:
         fallback_to_abstract: bool = True,
     ) -> Optional[str]:
         """Convert a single PMID to markdown. Internal helper."""
-        pmcid_mapping = get_pmcid_from_pmid([pmid], email=self.email)
-        pmcid = pmcid_mapping.get(str(pmid).strip())
-
-        if pmcid is None:
-            if not fallback_to_abstract:
-                return None
-            logger.warning(
-                f"PMID {pmid} is not available on PubMed Central (Open Access). "
-                f"Downloading abstract only."
-            )
-            return get_abstract_markdown_from_pmid(
-                pmid, email=self.email, ncbi_key=self.ncbi_key
-            )
-
-        full_md = self._single_pmcid_to_markdown(pmcid, include_supplements)
-        if full_md is not None:
-            return full_md
-
-        if fallback_to_abstract:
-            logger.warning(
-                f"Full text unavailable for PMID {pmid} ({pmcid}); "
-                f"falling back to abstract only."
-            )
-            return get_abstract_markdown_from_pmid(
-                pmid, email=self.email, ncbi_key=self.ncbi_key
-            )
-        return None
+        return self.fetch_pmid(
+            pmid,
+            include_supplements=include_supplements,
+            fallback_to_abstract=fallback_to_abstract,
+        ).markdown
 
     def pmid_to_markdown(
         self,
